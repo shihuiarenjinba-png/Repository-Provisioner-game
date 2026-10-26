@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 import re
 import sys
+import unicodedata
 
 SCHEMA_VERSION = "1.0"
 OWNER = "shihuiarenjinba-png"
@@ -71,8 +72,8 @@ def validate_job(record: dict) -> dict:
         raise ValueError("exact non-placeholder Git commit SHA required")
     display = record["display_name"]
     if (not isinstance(display, str) or not 1 <= len(display) <= 100
-            or display.strip() != display
-            or any(ord(c) < 32 or ord(c) == 127 for c in display)):
+            or not display.strip() or display.strip() != display
+            or any(unicodedata.category(c) in ("Cc", "Cf") for c in display)):
         raise ValueError("invalid display_name")
     actions = record["requested_actions"]
     if (not isinstance(actions, list) or len(actions) != len(ACTIONS)
