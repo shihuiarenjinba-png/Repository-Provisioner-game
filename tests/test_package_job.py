@@ -46,6 +46,27 @@ class PackageJobTests(unittest.TestCase):
         b["source_sha"] = "b" * 40
         self.assertNotEqual(a["idempotency_key"], validate_job(b)["idempotency_key"])
 
+    def test_idempotency_key_binds_every_validated_job_field(self):
+        original = sample()
+        baseline = validate_job(original)["idempotency_key"]
+        # Same request_id/source SHA/slug is NOT enough to identify a job.
+        for field, replacement in (
+            ("display_name", "Another Game Title"),
+            ("request_id", "game-20261026-002"),
+            ("slug", "another-puzzle-game"),
+            ("source_sha", "b" * 40),
+        ):
+            with self.subTest(field=field):
+                changed = sample()
+                changed[field] = replacement
+                self.assertNotEqual(
+                    baseline, validate_job(changed)["idempotency_key"])
+        # Action ordering does not change the requested operation set.
+        reordered = sample()
+        reordered["requested_actions"] = list(reversed(reordered["requested_actions"]))
+        self.assertEqual(
+            baseline, validate_job(reordered)["idempotency_key"])
+
     def test_cross_lane_and_invalid_input_fail_closed(self):
         changes = [
             ("schema_version", 1),
