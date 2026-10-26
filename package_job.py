@@ -79,8 +79,13 @@ def validate_job(record: dict) -> dict:
             or set(map(str, actions)) != set(ACTIONS)
             or any(not isinstance(x, str) for x in actions)):
         raise ValueError("unsupported requested_actions")
-    # Stable identity for a future durable ledger; this is NOT a ledger.
-    key = sha256((rid + "\n" + sha + "\n" + slug + "\nGAME").encode()).hexdigest()
+    # Bind the key to the entire validated job, not just request_id/slug/SHA.
+    # Otherwise a changed display_name or requested_actions could be treated
+    # as the same request by a future durable idempotency ledger.
+    canonical = dict(record)
+    canonical["requested_actions"] = sorted(actions)  # order is not semantic
+    key_material = json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    key = sha256(b"GAME_PACKAGE_JOB_V1\x00" + key_material.encode("ascii")).hexdigest()
     return {
         "schema_version": SCHEMA_VERSION,
         "request_id": rid,
