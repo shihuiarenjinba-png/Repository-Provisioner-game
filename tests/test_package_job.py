@@ -215,5 +215,32 @@ class PackageJobTests(unittest.TestCase):
             self.assertEqual(run.returncode, 2)
             self.assertEqual(target.read_text(), "protected")
 
+
+    def test_cli_never_overwrites_existing_receipt(self):
+        with tempfile.TemporaryDirectory() as td:
+            source = Path(td) / "job.json"
+            target = Path(td) / "receipt.json"
+            source.write_text(json.dumps(sample()), encoding="utf-8")
+            target.write_text("existing verified receipt", encoding="utf-8")
+            self.assertEqual(main(["--input", str(source), "--output", str(target)]), 2)
+            self.assertEqual(target.read_text(encoding="utf-8"), "existing verified receipt")
+            # An accidental input=output collision must not destroy the job.
+            before = source.read_bytes()
+            self.assertEqual(main(["--input", str(source), "--output", str(source)]), 2)
+            self.assertEqual(source.read_bytes(), before)
+
+    def test_cli_linked_input_rejected_without_receipt(self):
+        with tempfile.TemporaryDirectory() as td:
+            source = Path(td) / "real-job.json"
+            link = Path(td) / "linked-job.json"
+            target = Path(td) / "receipt.json"
+            source.write_text(json.dumps(sample()), encoding="utf-8")
+            try:
+                link.symlink_to(source)
+            except (OSError, NotImplementedError):
+                self.skipTest("symlink unsupported")
+            self.assertEqual(main(["--input", str(link), "--output", str(target)]), 2)
+            self.assertFalse(target.exists())
+
 if __name__ == "__main__":
     unittest.main()
