@@ -90,6 +90,21 @@ class PackageJobTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     validate_job(record)
 
+    def test_display_name_rejects_invisible_bidi_and_blank_titles(self):
+        # The Factory rejects Unicode Cc/Cf characters; local intake must
+        # enforce the same policy even for hand-crafted or stale JSON jobs.
+        for title in (" ", "   ", "Puzzle\\u202eexe", "Puzzle\\u200bGame", "Puzzle\\u2066Game", "Puzzle\\u007fGame"):
+            with self.subTest(title=repr(title)):
+                job = sample()
+                job["display_name"] = title
+                with self.assertRaisesRegex(ValueError, "display_name"):
+                    validate_job(job)
+        for title in ("Arcade Puzzle Game", "パズルゲーム", "Puzzle: 2D"):
+            with self.subTest(title=title):
+                job = sample()
+                job["display_name"] = title
+                self.assertEqual(validate_job(job)["status"], "DRY_RUN")
+
     def test_unknown_missing_and_nonobject(self):
         record = sample()
         record["execute"] = True
