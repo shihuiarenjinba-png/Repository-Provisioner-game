@@ -545,13 +545,25 @@ class GitHubReturnClient:
 
     @staticmethod
     def _existing_matches(existing: dict[str, Any], official: dict[str, Any]) -> bool:
-        if existing.get("encoding") != "base64":
+        # An existing file is not proof of review just because four Identity
+        # fields match. Require the same operator evidence used for a new return.
+        if not isinstance(existing, dict) or existing.get("encoding") != "base64":
             return False
         try:
             content = json.loads(base64.b64decode(existing["content"], validate=True))
-        except Exception:
+        except (KeyError, ValueError, TypeError, json.JSONDecodeError):
             return False
-        return all(content.get(key) == official.get(key) for key in ("store_id", "name", "publisher", "version"))
+        expected = {
+            "reviewed": True,
+            "source": "partner_center",
+            **{key: official[key] for key in ("store_id", "name", "publisher", "version")},
+            "verified_by": official["authenticated_account"],
+            "evidence_url": official["official_evidence_url"],
+        }
+        return isinstance(content, dict) and all(
+            type(content.get(key)) is type(value) and content.get(key) == value
+            for key, value in expected.items()
+        )
 
     @staticmethod
     def _gh_api(endpoint: str, body: dict[str, Any] | None = None, allow_missing: bool = False) -> Any:
