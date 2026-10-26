@@ -1,5 +1,8 @@
 """Fail-closed GAME package-intake regression tests (no network/Store access)."""
 import copy
+from io import BytesIO
+from urllib.error import URLError
+from unittest.mock import patch
 import json
 from pathlib import Path
 import subprocess
@@ -7,7 +10,7 @@ import sys
 import tempfile
 import unittest
 
-from package_job import validate_job
+from package_job import main, validate_job, verify_live_source_head
 
 def sample():
     return {
@@ -116,6 +119,61 @@ class PackageJobTests(unittest.TestCase):
             validate_job(record)
         with self.assertRaises(ValueError):
             validate_job([])
+
+    def test_live_head_check_accepts_only_exact_factory_commit(self):
+        job = sample()
+        response = json.dumps({"object": {"sha": job["source_sha"]}}).encode()
+        with patch("package_job.urlopen", return_value=BytesIO(response)) as fetch:
+            self.assertEqual(verify_live_source_head(job), job["source_sha"])
+        request = fetch.call_args.args[0]
+        self.assertEqual(
+            request.full_url,
+            "https://api.github.com/repos/shihuiarenjinba-png/"
+            "AI-Game-Factory/git/ref/heads/codex/factory-autoloop-20261026",
+        )
+        self.assertEqual(fetch.call_args.kwargs["timeout"], 10)
+        self.assertNotIn("token", request.full_url.lower())
+
+    def test_live_head_check_rejects_stale_or_unavailable_source(self):
+        job = sample()
+        for response in (
+            {"object": {"sha": "b" * 40}},
+            {"object": {"sha": "not-a-sha"}},
+            {"message": "Not Found"},
+        ):
+            with self.subTest(response=response):
+                with patch("package_job.urlopen",
+                           return_value=BytesIO(json.dumps(response).encode())):
+                    with self.assertRaises(ValueError):
+                        verify_live_source_head(job)
+        with patch("package_job.urlopen", side_effect=URLError("offline")):
+            with self.assertRaisesRegex(ValueError, "could not be verified"):
+                verify_live_source_head(job)
+
+    def test_cli_opt_in_live_head_check_is_read_only_and_fail_closed(self):
+        with tempfile.TemporaryDirectory() as td:
+            source = Path(td) / "job.json"
+            target = Path(td) / "receipt.json"
+            job = sample()
+            source.write_text(json.dumps(job), encoding="utf-8")
+            response = json.dumps({"object": {"sha": job["source_sha"]}}).encode()
+            with patch("package_job.urlopen", return_value=BytesIO(response)):
+                self.assertEqual(main(["--input", str(source),
+                                       "--output", str(target),
+                                       "--verify-live-head"]), 0)
+            receipt = json.loads(target.read_text(encoding="utf-8"))
+            self.assertEqual(receipt["status"], "DRY_RUN")
+            self.assertEqual(receipt["expected_head_sha"], job["source_sha"])
+            self.assertIsNone(receipt["github_return"]["commit_sha"])
+            self.assertEqual({p.name for p in Path(td).iterdir()},
+                             {"job.json", "receipt.json"})
+            target.unlink()
+            with patch("package_job.urlopen", return_value=BytesIO(
+                    json.dumps({"object": {"sha": "b" * 40}}).encode())):
+                self.assertEqual(main(["--input", str(source),
+                                       "--output", str(target),
+                                       "--verify-live-head"]), 2)
+            self.assertFalse(target.exists())
 
     def test_cli_no_external_side_effects(self):
         with tempfile.TemporaryDirectory() as td:
