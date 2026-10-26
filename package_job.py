@@ -1,7 +1,7 @@
 """Strict, offline GAME Factory -> local package/Identity intake contract.
 
-Validation is intentionally read-only: it does not call GitHub, build an game,
-query Partner Center, register a product, or write gameroved-identity.json.
+Validation is intentionally read-only: it does not call GitHub, build a game,
+query Partner Center, register a product, or write approved-identity.json.
 """
 from __future__ import annotations
 
@@ -102,7 +102,7 @@ def validate_job(record: dict) -> dict:
         "github_return": {
             "status": "NOT_GAMELIED",
             "repository": REPOSITORY, "branch": BRANCH,
-            "path": "products/" + slug + "/store/gameroved-identity.json",
+            "path": "products/" + slug + "/store/approved-identity.json",
             "commit_sha": None,
         },
         "errors": [],
