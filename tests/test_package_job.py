@@ -93,7 +93,7 @@ class PackageJobTests(unittest.TestCase):
     def test_display_name_rejects_invisible_bidi_and_blank_titles(self):
         # The Factory rejects Unicode Cc/Cf characters; local intake must
         # enforce the same policy even for hand-crafted or stale JSON jobs.
-        for title in (" ", "   ", "Puzzle\\u202eexe", "Puzzle\\u200bGame", "Puzzle\\u2066Game", "Puzzle\\u007fGame"):
+        for title in (" ", "   ", "Puzzle\u202eexe", "Puzzle\u200bGame", "Puzzle\u2066Game", "Puzzle\u007fGame"):
             with self.subTest(title=repr(title)):
                 job = sample()
                 job["display_name"] = title
