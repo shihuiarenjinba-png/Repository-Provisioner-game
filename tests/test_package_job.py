@@ -59,7 +59,7 @@ class PackageJobTests(unittest.TestCase):
             ("slug", "../../escape"), ("slug", "UPPER"),
             ("source_sha", "0" * 40), ("source_sha", "a" * 39),
             ("source_sha", "A" * 40),
-            ("display_name", ""), ("display_name", "bad\\ncommand"),
+            ("display_name", ""), ("display_name", "bad\ncommand"),
             ("requested_actions", ["BUILD_WINDOWS"]),
         ]
         for field, invalid in changes:
