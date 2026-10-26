@@ -1,5 +1,9 @@
 {
-  "kind": "game",
-  "owner": "shihuiarenjinba-png",
-  "create_enabled": false
+  "product_type": "GAME",
+  "source_factory": "AI-Game-Factory",
+  "source_repository": "shihuiarenjinba-png/AI-Game-Factory",
+  "source_branch": "codex/factory-autoloop-20261026",
+  "target_owner": "shihuiarenjinba-png",
+  "build_kind": "WINDOWS",
+  "output_patterns": ["**/*.msix", "**/*.appx", "**/*.exe"]
 }
