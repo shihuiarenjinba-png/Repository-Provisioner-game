@@ -495,7 +495,7 @@ class GitHubReturnClient:
         existing = self.api(base + "contents/" + target_path + "?ref=" + quote(config.source_branch, safe=""), allow_missing=True)
         if existing is not None:
             if self._existing_matches(existing, official):
-                return {**proposal, "status": "EXISTING_VERIFIED", "commit_sha": existing.get("sha")}
+                return {**proposal, "status": "EXISTING_VERIFIED", "commit_sha": ref["object"]["sha"]}
             raise ConflictError("approved-identity.json already exists and will not be overwritten")
         approved = {"reviewed": True, "source": "partner_center", "store_id": official["store_id"],
                     "name": official["name"], "publisher": official["publisher"], "version": official["version"],
