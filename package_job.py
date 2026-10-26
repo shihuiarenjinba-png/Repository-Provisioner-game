@@ -8,6 +8,9 @@ from __future__ import annotations
 import argparse
 from hashlib import sha256
 import json
+import os
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 from pathlib import Path
 import re
 import sys
@@ -121,10 +124,46 @@ def validate_job(record: dict) -> dict:
     }
 
 
+def verify_live_source_head(record: dict) -> str:
+    """Read the trusted Factory branch HEAD; never trust a caller-supplied SHA alone.
+
+    This is a read-only, opt-in check. A subsequent GitHub write must still
+    compare the branch HEAD atomically because it may move after this check.
+    """
+    # Called only after validate_job has fixed the repository and branch.
+    url = "https://api.github.com/repos/" + REPOSITORY + "/git/ref/heads/" + BRANCH
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "Repository-Provisioner-game-head-verification",
+    }
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    request = Request(url, headers=headers)
+    try:
+        with urlopen(request, timeout=10) as response:
+            raw = response.read(32769)
+        if len(raw) > 32768:
+            raise ValueError("oversized GitHub response")
+        payload = json.loads(raw)
+        live_sha = payload["object"]["sha"]
+    except (HTTPError, URLError, TimeoutError, OSError, ValueError,
+            TypeError, KeyError) as exc:
+        # No HTTP exception text or token is included in receipts/logs.
+        raise ValueError("live Factory HEAD could not be verified") from None
+    if not isinstance(live_sha, str) or not SHA40.fullmatch(live_sha):
+        raise ValueError("GitHub returned an invalid Factory HEAD")
+    if live_sha != record["source_sha"]:
+        raise ValueError("Factory HEAD changed: source_sha is stale")
+    return live_sha
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", required=True, type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--verify-live-head", action="store_true",
+                        help="Read-only GitHub Factory branch HEAD check; no build or write")
     args = parser.parse_args(argv)
     try:
         if args.input.stat().st_size > 32768:
@@ -132,6 +171,12 @@ def main(argv=None) -> int:
         data = json.loads(args.input.read_text(encoding="utf-8"),
                           object_pairs_hook=_reject_duplicates)
         receipt = validate_job(data)
+        if args.verify_live_head:
+            receipt["expected_head_sha"] = verify_live_source_head(data)
+            receipt["note"] += (
+                " Live Factory HEAD matched at lookup time; recheck atomically"
+                " before any future GitHub identity write."
+            )
         encoded = json.dumps(receipt, ensure_ascii=False, indent=2) + "\n"
         if args.output:
             if args.output.is_symlink():
