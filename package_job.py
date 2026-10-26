@@ -166,6 +166,8 @@ def main(argv=None) -> int:
                         help="Read-only GitHub Factory branch HEAD check; no build or write")
     args = parser.parse_args(argv)
     try:
+        if args.input.is_symlink() or not args.input.is_file():
+            raise ValueError("missing or linked job JSON")
         if args.input.stat().st_size > 32768:
             raise ValueError("job JSON too large")
         data = json.loads(args.input.read_text(encoding="utf-8"),
@@ -179,9 +181,11 @@ def main(argv=None) -> int:
             )
         encoded = json.dumps(receipt, ensure_ascii=False, indent=2) + "\n"
         if args.output:
-            if args.output.is_symlink():
-                raise ValueError("symlink output forbidden")
-            args.output.write_text(encoded, encoding="utf-8")
+            # Exclusive creation is atomic: never overwrite a prior receipt,
+            # an input job, or a symlink swapped into place by another process.
+            # A retry must choose a new output path or inspect the old receipt.
+            with args.output.open("x", encoding="utf-8") as stream:
+                stream.write(encoded)
         else:
             print(encoded, end="")
         return 0
