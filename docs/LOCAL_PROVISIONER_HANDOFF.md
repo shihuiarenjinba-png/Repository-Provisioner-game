@@ -12,8 +12,10 @@
 - 基準: `main` / `6b404e0e8955dcf96ee3d9cf12b1d3b899f73637`
 - 作業ブランチ: `codex/provisioner-bootstrap-20261026`
 - 作業開始時HEAD: `c4e73b686a2101a969cd834f483e37dd7e941f52`
+- 資料生成時の実装HEAD: `8331d42dacdd3469f24b14dfe0d0a32316b0dc71`
+- コミット: `c4e73b6 docs: redirect...`、`8331d42 feat: implement package identity round-trip provisioner`
 - Draft PR: https://github.com/shihuiarenjinba-png/Repository-Provisioner-game/pull/1
-- 差分: Package+Identity CLI、共通Schema、SHA固定取得、Windows build adapter、MSIX/署名/PFN/SID解析、型別台帳・排他、公式Identity照合、GitHub CAS返却、CI、テスト。
+- 差分: Package+Identity CLI、共通Schema、SHA固定取得、Windows build adapter、MSIX/署名/PFN/SID解析、型別台帳・排他、公式Identity照合、GitHub CAS返却、CI、テスト。資料更新commit自体のSHAはDraft PRの最新HEADを正とする。
 
 ## テスト情報
 
