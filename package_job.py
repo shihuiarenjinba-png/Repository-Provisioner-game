@@ -55,9 +55,9 @@ def validate_job(record: dict) -> dict:
     if record["source_repository"] != REPOSITORY:
         raise ValueError("untrusted source_repository")
     if record["source_branch"] != BRANCH:
-        raise ValueError("ungameroved source_branch")
+        raise ValueError("unapproved source_branch")
     if record["target_owner"] != OWNER:
-        raise ValueError("ungameroved target_owner")
+        raise ValueError("unapproved target_owner")
     if record["dry_run"] is not True:
         raise ValueError("live execution not implemented or authorized")
     rid = record["request_id"]
