@@ -668,7 +668,8 @@ class GitHubReturnClient:
                     "package_family_name": official["package_family_name"], "package_sid": official["package_sid"],
                     "signature_status": package["signature_status"], "store_id": official["store_id"],
                     "name": official["name"], "publisher": official["publisher"], "version": official["version"],
-                    "verified_by": official["authenticated_account"], "evidence_url": official["official_evidence_url"]}
+                    "verified_by": official["authenticated_account"], "evidence_url": official["official_evidence_url"],
+                    "verified_at": official["verified_at"]}
         content = json.dumps(approved, ensure_ascii=False, indent=2) + "\n"
         body = {"query": self.MUTATION, "variables": {"input": {
             "branch": {"repositoryNameWithOwner": config.source_repository, "branchName": job.source_branch},
@@ -739,6 +740,7 @@ class GitHubReturnClient:
             **{key: official[key] for key in ("store_id", "name", "publisher", "version")},
             "verified_by": official["authenticated_account"],
             "evidence_url": official["official_evidence_url"],
+            "verified_at": official["verified_at"],
             "request_id": job.request_id,
             "product_type": job.product_type,
             "slug": job.slug,
