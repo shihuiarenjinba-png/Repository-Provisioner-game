@@ -463,6 +463,14 @@ def inspect_package(path: Path) -> dict[str, Any]:
         return result
     try:
         with zipfile.ZipFile(path) as archive:
+            members = archive.infolist()
+            # Never accept a package whose manifest is intact but its EXE or
+            # another payload has a corrupt CRC. Bound decompression first.
+            if (not members or len(members) > 2000 or
+                    sum(member.file_size for member in members) > 300 * 1024 * 1024):
+                raise HoldError("MSIX has excessive or missing ZIP payload")
+            if archive.testzip() is not None:
+                raise HoldError("MSIX contains a CRC-corrupted payload")
             manifest_name = next((n for n in archive.namelist() if n.lower() == "appxmanifest.xml"), None)
             if manifest_name is None:
                 raise HoldError("MSIX is missing AppxManifest.xml")

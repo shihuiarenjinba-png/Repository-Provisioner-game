@@ -6,9 +6,9 @@
 
 **HOLD — Signal SprintのSHA固定Windows EXE生成と検査までは実証済み。公式Partner Center Identity、Factory CAS書戻し、正式IdentityによるMSIX再生成、Windows-all-auto受領、Windows-checker/UI QAは未実施。** Store提出は0件で、新規製品の生成は禁止を維持する。
 
-- 統合元: `codex/game-signal-sprint-exe-identity-stage-20261027` / `a5676f601b35e45ae21ce6e284579ed169e7b3b7`
+- 統合元: `codex/game-signal-sprint-exe-identity-stage-20261027` / `9a27eb3b7bb9bab4898acc42b028d1d0a0b04cf7`
 - ローカル作業ブランチ: `codex/e2e-belt-connection-20261027`
-- 自動テスト: **69件 / PASS 69 / FAIL 0 / SKIP 0**
+- 自動テスト: **70件 / PASS 70 / FAIL 0 / SKIP 0**
 - 共通Schema正規化SHA-256: job `0fbdaf38d25563bf60f756fbf2dd03468517584fb7b05b1bf5f942bf27c1d599` / result `1264f0285283c77aceb2956d687ff3898657578b82ba37ff475a8565f8709310`
 - PowerShell 7 (`pwsh`)を優先し、未導入環境のみWindows PowerShellへフォールバックする。長いビルド失敗ログは秘密を伏せ、先頭と根本原因を含む末尾を保持する。
 
@@ -137,3 +137,14 @@ The historical fixed-branch guidance above is superseded for this one active pro
 4. Before actual MSIX: safely integrate Factory official-evidence/CRC gates from its diverged safety PRs into the active product branch without force push or main merge. Build a real MSIX only from authenticated official Identity, validate payload CRC, executable, package SHA and provenance, then deliver only the real `type=game` MSIX to Windows-all-auto and perform local GUI QA plus Windows-checker. CI alone is not E2E PASS.
 
 **Local fixed-SHA EXE execution and inspection are verified. Official Identity, real MSIX, bridge receipt, GUI QA and Store submission have not occurred.**
+
+
+## 2026-10-27 14:09 JST — GAME E2E safety gate correction
+
+- **Active product remains** `signal-sprint`; `new_product_allowed=false`. Do not generate another game.
+- **Factory source is immutable:** `AI-Game-Factory/codex/game-signal-sprint-undo-20261027@c058cbf7fe38e02d929c67d047d717ff74bd522e`. Request ID remains `game-signal-sprint-c058cbf7fe38e02d929c67d047d717ff74bd522e` and slug remains `signal-sprint`.
+- **Resume repository / branch:** `shihuiarenjinba-png/Repository-Provisioner-game` / `codex/game-signal-sprint-exe-identity-stage-20261027`; re-fetch latest HEAD, never reuse a stale Provisioner checkout. Source Factory SHA above is *not* changed by Provisioner code commits.
+- **This cycle's implementation:** MSIX inspection now checks CRC for **all** ZIP members, not just the manifest; bounded total uncompressed size and member count. The Windows-all-auto adapter now carries the original request_id, product_type, source_factory, source_repository, source_branch and source_sha in addition to slug/expected_head_sha. Regression tests cover CRC-corrupted non-manifest payload and immutable receipt fields.
+- **Phase:** `LOCAL_EXE_INSPECTED__PARTNER_CENTER_IDENTITY_HOLD`. Factory unsigned EXE Artifact verification、DRY_RUN、固定SHAのローカル再ビルドとPE/署名/SHA検査まで完了。
+- **Next action:** 認証済みPartner Center証拠を取得し、同一相関キーを再確認後、同じFactory作業ブランチの`products/signal-sprint/store/approved-identity.json`へCAS返却する。commit SHA必須。Factory HEAD変更または同request_idでSHA/slug相違は`CONFLICT`。
+- **Blocked by:** authenticated official Partner Center Identity、Factory safety PR #7とproduct PR #10の安全な統合、real MSIX、Windows-all-auto `type=game` receipt、Windows-checker/GUI QA。unsigned EXEをMSIXまたはE2E PASSとして扱わない。
