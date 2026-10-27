@@ -257,3 +257,19 @@ The active product remains **Signal Sprint only**. This checkpoint fixes a real 
 - **Next action:** use the reviewed `Windows-all-auto/codex/local-identity-return-worker-20261027-1639` check-only mode with the current Provisioner PR #8 HEAD; obtain separately authenticated Partner Center evidence and explicit local CAS approval. Immediately before `--apply`, verify the fixed Factory HEAD still equals `c058cbf7...`; otherwise `CONFLICT`. After CAS, integrate Factory safety PR #7 and handoff PR #11 only on a dedicated build branch. Before accepting GAME MSIX, test that Factory handoff binds approved `slug` and Manifest launch executable/payload CRC, and preserves `source_sha` distinct from `factory_head_sha`.
 - **Blocked by:** `EXTERNAL_IDENTITY`, `HUMAN_APPROVAL`; Factory return commit, `factory_head_sha`, real MSIX SHA/Artifact, Windows-all-auto `type=game` receipt, local QA and Checker GUI/install receipt remain **null**. CI PASS, contract PASS, real E2E PASS and commercial quality PASS are separate gates.
 - **Resume:** `shihuiarenjinba-png/Repository-Provisioner-game` / `codex/game-msix-package-safety-20261027-1510` (re-fetch latest HEAD and CI). Also inspect `Windows-all-auto/codex/e2e-belt-connection-20261027:ops/active_e2e_handoff.json` and PR #16. No main/release changes, merge, force push, Store submission or new game.
+
+## 2026-10-27 — ambiguous CAS response recovery
+
+Branch `codex/game-identity-idempotency-20261027` is stacked on reviewed PR #8
+after re-fetching its latest HEAD. It changes no product,
+Identity, Factory source, or package bytes.  On an apply retry, the existing
+`approved-identity.json` is now read and fully correlated before requiring the
+branch to still equal the original source SHA.  This permits the exact matching
+payload to return `EXISTING_VERIFIED` after a successful CAS advanced HEAD but
+the first API response was lost.  A missing or different payload with changed
+HEAD remains `CONFLICT`; no existing file is overwritten.
+
+- Targeted tests: 77/77 PASS.
+- Full Provisioner regression: 83/83 PASS; Python compile PASS.
+- Live CAS: not run. Authenticated official Identity is absent.
+- Current product state: `HOLD / EXTERNAL_IDENTITY`; `e2e_pass=false`.

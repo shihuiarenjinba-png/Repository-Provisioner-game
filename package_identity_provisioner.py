@@ -644,14 +644,21 @@ class GitHubReturnClient:
         if not apply:
             return proposal
         ref = self.api(base + "git/ref/heads/" + job.source_branch)
-        if not isinstance(ref, dict) or ref.get("object", {}).get("sha") != job.source_sha:
-            raise ConflictError("Factory HEAD changed before identity return")
+        head_sha = ref.get("object", {}).get("sha") if isinstance(ref, dict) else None
+        if not isinstance(head_sha, str) or not SHA40.fullmatch(head_sha):
+            raise RetryableError("Factory HEAD could not be verified before identity return")
         self._verify_product(base, job, config)
         existing = self.api(base + "contents/" + target_path + "?ref=" + quote(job.source_branch, safe=""), allow_missing=True)
         if existing is not None:
             if self._existing_matches(existing, official, job, package):
-                return {**proposal, "status": "EXISTING_VERIFIED", "commit_sha": ref["object"]["sha"]}
+                # A successful atomic return advances the source branch.  A
+                # retry after an ambiguous API response must therefore inspect
+                # the existing immutable payload before comparing HEAD with the
+                # original source SHA.  This is read-only and never overwrites.
+                return {**proposal, "status": "EXISTING_VERIFIED", "commit_sha": head_sha}
             raise ConflictError("approved-identity.json already exists and will not be overwritten")
+        if head_sha != job.source_sha:
+            raise ConflictError("Factory HEAD changed before identity return")
         approved = {"schema_version": SCHEMA_VERSION, "reviewed": True, "source": "partner_center",
                     "request_id": job.request_id, "product_type": job.product_type,
                     "slug": job.slug,
