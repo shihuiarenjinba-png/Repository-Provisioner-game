@@ -513,7 +513,7 @@ class GitHubReturnClient:
         existing = self.api(base + "contents/" + target_path + "?ref=" + quote(job.source_branch, safe=""), allow_missing=True)
         if existing is not None:
             if self._existing_matches(existing, official):
-                return {**proposal, "status": "EXISTING_VERIFIED", "commit_sha": existing.get("sha")}
+                return {**proposal, "status": "EXISTING_VERIFIED", "commit_sha": ref["object"]["sha"]}
             raise ConflictError("approved-identity.json already exists and will not be overwritten")
         approved = {"reviewed": True, "source": "partner_center", "store_id": official["store_id"],
                     "name": official["name"], "publisher": official["publisher"], "version": official["version"],
@@ -572,13 +572,23 @@ class GitHubReturnClient:
 
     @staticmethod
     def _existing_matches(existing: dict[str, Any], official: dict[str, Any]) -> bool:
-        if existing.get("encoding") != "base64":
+        # Matching Identity fields alone do not establish Partner Center review.
+        if not isinstance(existing, dict) or existing.get("encoding") != "base64":
             return False
         try:
             content = json.loads(base64.b64decode(existing["content"], validate=True))
-        except Exception:
+            expected = {
+                "reviewed": True, "source": "partner_center",
+                **{key: official[key] for key in ("store_id", "name", "publisher", "version")},
+                "verified_by": official["authenticated_account"],
+                "evidence_url": official["official_evidence_url"],
+            }
+        except (KeyError, ValueError, TypeError, json.JSONDecodeError):
             return False
-        return all(content.get(key) == official.get(key) for key in ("store_id", "name", "publisher", "version"))
+        return isinstance(content, dict) and all(
+            type(content.get(key)) is type(value) and content.get(key) == value
+            for key, value in expected.items()
+        )
 
     @staticmethod
     def _gh_api(endpoint: str, body: dict[str, Any] | None = None, allow_missing: bool = False) -> Any:
@@ -647,6 +657,15 @@ class Provisioner:
                     return response
                 if previous and prior_status in FINAL_STATUSES and not promoted:
                     return {**previous["response"], "idempotent_replay": True}
+                # A GAME EXE with a completed official Identity return is a
+                # terminal *stage*, not a finished MSIX. Never reapply it on replay.
+                prior_response = (previous or {}).get("response", {})
+                if (previous and prior_status == "HOLD"
+                        and prior_response.get("next_stage") == "GITHUB_REBUILD_MSIX"
+                        and prior_response.get("github_return", {}).get("status")
+                        in {"APPLIED", "EXISTING_VERIFIED"}
+                        and prior_response.get("package", {}).get("kind") == "exe"):
+                    return {**prior_response, "idempotent_replay": True}
                 if job.dry_run:
                     response = self._base_response(job, "DRY_RUN", started)
                     response["next_stage"] = "SUBMIT_NON_DRY_RUN_AFTER_REVIEW"
@@ -656,6 +675,38 @@ class Provisioner:
                     root = self.work_dir / hashlib.sha256(job.request_id.encode()).hexdigest()[:16]
                     source_dir = self.source.acquire(job, root / "source")
                     package = inspect_package(self.builder.build(job, source_dir, root / "artifacts", self.config))
+                    # Signal Sprint currently produces a real unsigned EXE.
+                    # The official Identity must be returned BEFORE the Factory
+                    # can create an MSIX. Preserve the EXE SHA as a HOLD stage,
+                    # never mistake it for an MSIX or queue it to Windows-all-auto.
+                    if self.config.product_type == "GAME" and package["kind"] == "exe":
+                        try:
+                            official = self.identity.lookup(job)
+                        except HoldError as exc:
+                            response = self._base_response(job, "HOLD", started)
+                            response.update(package=package,
+                                            errors=[redact(str(exc))],
+                                            next_stage="OBTAIN_AUTHENTICATED_OFFICIAL_IDENTITY")
+                            self._save(job, response, {"stage": "EXE_BUILT_IDENTITY_HOLD",
+                                                       "package_sha256": package["sha256"]})
+                            return response
+                        returned = self.github.return_identity(job, self.config, official, apply=apply)
+                        applied = returned["status"] in {"APPLIED", "EXISTING_VERIFIED"}
+                        response = self._base_response(job, "HOLD", started)
+                        response.update(
+                            package=package,
+                            official_identity={"status": "VERIFIED_OPERATOR_EXPORT",
+                                               **{k: official[k] for k in
+                                                  ("store_id", "name", "publisher", "version",
+                                                   "official_evidence_url", "verified_at")}},
+                            github_return=returned,
+                            windows_all_auto_record=None,
+                            errors=["EXE_QA_ONLY: a verified real MSIX is not yet built"],
+                            next_stage=("GITHUB_REBUILD_MSIX" if applied
+                                        else "APPLY_VERIFIED_GITHUB_RETURN"))
+                        self._save(job, response, {"stage": "EXE_IDENTITY_" + returned["status"],
+                                                   "package_sha256": package["sha256"]})
+                        return response
                     official = self.identity.lookup(job)
                     compare_package_identity(package, official)
                     contract = windows_all_auto_record(job, official)
