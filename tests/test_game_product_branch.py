@@ -61,6 +61,11 @@ class IndependentGameBranchTests(unittest.TestCase):
                 self.assertIn("ref=codex%2Fgame-signal-sprint-playable-20261027", endpoint)
                 raw = json.dumps({"slug": "signal-sprint", "kind": "game"}).encode()
                 return {"encoding": "base64", "content": base64.b64encode(raw).decode()}
+            if "/proposals/" in endpoint:
+                self.assertIn("ref=codex%2Fgame-signal-sprint-playable-20261027", endpoint)
+                raw = json.dumps({"slug": "signal-sprint",
+                                  "title": "Signal Sprint - Offline Route Puzzle"}).encode()
+                return {"encoding": "base64", "content": base64.b64encode(raw).decode()}
             if "/approved-identity.json" in endpoint:
                 self.assertIn("ref=codex%2Fgame-signal-sprint-playable-20261027", endpoint)
                 return None
@@ -82,7 +87,22 @@ class IndependentGameBranchTests(unittest.TestCase):
         self.assertEqual(result["branch"], PRODUCT_BRANCH)
         self.assertEqual(result["path"], "products/signal-sprint/store/approved-identity.json")
         self.assertEqual(result["commit_sha"], "b" * 40)
-        self.assertEqual(len(calls), 4)
+        self.assertEqual(len(calls), 5)
+
+    def test_mismatched_factory_product_name_is_conflict(self):
+        def fake_api(endpoint, body=None, allow_missing=False):
+            if "git/ref/heads/" in endpoint:
+                return {"object": {"sha": SHA}}
+            if "/manifest.json" in endpoint:
+                raw = json.dumps({"slug": "signal-sprint", "kind": "game"}).encode()
+                return {"encoding": "base64", "content": base64.b64encode(raw).decode()}
+            if "/proposals/" in endpoint:
+                raw = json.dumps({"slug": "signal-sprint", "title": "Other Game"}).encode()
+                return {"encoding": "base64", "content": base64.b64encode(raw).decode()}
+            raise AssertionError(endpoint)
+        with self.assertRaises(ConflictError):
+            GitHubReturnClient(fake_api).return_identity(
+                Job.validate(request(), self.config), self.config, {}, apply=True)
 
     def test_same_request_id_different_branch_sha_or_slug_conflicts(self):
         with tempfile.TemporaryDirectory() as directory:
