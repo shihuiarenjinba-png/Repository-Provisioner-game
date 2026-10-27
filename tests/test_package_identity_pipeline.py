@@ -12,7 +12,7 @@ from package_identity_provisioner import (
     ConflictError, GitHubReturnClient, HoldError, Job, Ledger, OfficialIdentityProvider,
     PackageBuilder, ProductConfig, Provisioner, RequestLock, RetryableError,
     SourceManager, compare_package_identity, inspect_package, redact,
-    windows_all_auto_record, _package_family_name,
+    windows_all_auto_record, _package_family_name, _windows_package_sid,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -41,14 +41,24 @@ def job(**updates):
 
 def evidence(**updates):
     cfg = config()
+    family = _package_family_name("Sample.Product", "CN=Test Publisher") or "Sample.Product_abcdefghijklm"
+    sid = _windows_package_sid(family) or "S-1-15-2-1-2-3-4-5-6-7"
     value = {
         "request_id": "req-0001", "product_type": cfg.product_type, "slug": "sample-product",
         "source_sha": SHA, "authenticated_account": "partner-operator@example.invalid",
         "verified_at": "2026-10-26T00:00:00Z",
         "official_evidence_url": "https://partner.microsoft.com/dashboard/products/123",
         "store_id": "9N1234567890", "name": "Sample.Product", "publisher": "CN=Test Publisher",
-        "version": "1.2.3.4",
+        "version": "1.2.3.4", "package_family_name": family, "package_sid": sid,
     }
+    value.update(updates)
+    return value
+
+
+def package_result(**updates):
+    official = evidence()
+    value = {"sha256": "d" * 64, "package_family_name": official["package_family_name"],
+             "package_sid": official["package_sid"], "signature_status": "NOTSIGNED"}
     value.update(updates)
     return value
 
@@ -130,6 +140,12 @@ class ContractValidationTests(unittest.TestCase):
     def test_wrong_return_branch_is_hold(self):
         with self.assertRaises(HoldError):
             Job.validate(job(source_branch="main"), config())
+    def test_other_safe_codex_work_branch_is_allowed(self):
+        self.assertEqual(Job.validate(job(source_branch="codex/product/sample-product"), config()).source_branch,
+                         "codex/product/sample-product")
+    def test_unsafe_codex_work_branch_is_hold(self):
+        with self.assertRaises(HoldError):
+            Job.validate(job(source_branch="codex/../main"), config())
     def test_placeholder_sha_is_hold(self):
         with self.assertRaises(HoldError):
             Job.validate(job(source_sha="0" * 40), config())
@@ -206,13 +222,16 @@ class IdentityEvidenceTests(unittest.TestCase):
                 OfficialIdentityProvider(path).lookup(Job.validate(job(), config()))
     def test_package_identity_mismatch_is_conflict(self):
         with self.assertRaises(ConflictError):
-            compare_package_identity({"kind": "msix", "package_identity": "Other", "publisher": "CN=Test Publisher", "version": "1.2.3.4"}, evidence())
+            compare_package_identity({**package_result(), "kind": "msix", "package_identity": "Other",
+                                      "publisher": "CN=Test Publisher", "version": "1.2.3.4"}, evidence())
     def test_exe_cannot_approve_official_identity(self):
         with self.assertRaises(HoldError):
             compare_package_identity({"kind": "exe"}, evidence())
     def test_windows_all_auto_adapter(self):
-        contract = windows_all_auto_record(Job.validate(job(), config()), evidence())
+        contract = windows_all_auto_record(Job.validate(job(), config()), evidence(), package_result())
         self.assertEqual(contract["expected_head_sha"], SHA)
+        self.assertEqual(contract["source_branch"], config().source_branch)
+        self.assertEqual(contract["package_sha256"], "d" * 64)
         self.assertTrue(contract["operator_verified"])
         self.assertEqual(contract["request_id"], "req-0001")
         self.assertEqual(contract["product_type"], "GAME")
@@ -241,38 +260,55 @@ class GitHubReturnTests(unittest.TestCase):
         raise AssertionError(endpoint)
 
     def test_atomic_apply_returns_real_commit_sha(self):
-        result = GitHubReturnClient(self.api).return_identity(Job.validate(job(), config()), config(), evidence(), True)
+        result = GitHubReturnClient(self.api).return_identity(
+            Job.validate(job(), config()), config(), evidence(), package_result(), True)
         self.assertEqual(result["status"], "APPLIED")
         self.assertEqual(result["commit_sha"], "b" * 40)
     def test_existing_identity_reuse_requires_verified_provenance(self):
         official = evidence()
+        selected_job = Job.validate(job(), config())
+        package = package_result()
         approved = {
             "reviewed": True, "source": "partner_center",
-            **{k: official[k] for k in ("store_id", "name", "publisher", "version")},
+            **{k: official[k] for k in ("store_id", "name", "publisher", "version",
+                                        "package_family_name", "package_sid")},
+            "request_id": selected_job.request_id, "product_type": selected_job.product_type,
+            "source_factory": selected_job.source_factory, "source_repository": selected_job.source_repository,
+            "source_branch": selected_job.source_branch, "source_sha": selected_job.source_sha,
+            "verified_source_sha": selected_job.source_sha, "package_sha256": package["sha256"],
+            "signature_status": package["signature_status"],
             "verified_by": official["authenticated_account"],
             "evidence_url": official["official_evidence_url"],
         }
         def wrapped(obj):
             return {"encoding": "base64", "content": base64.b64encode(
                 json.dumps(obj).encode("utf-8")).decode("ascii")}
-        self.assertTrue(GitHubReturnClient._existing_matches(wrapped(approved), official))
+        self.assertTrue(GitHubReturnClient._existing_matches(wrapped(approved), official, selected_job, package))
         for changes in ({"reviewed": 1}, {"reviewed": False}, {"source": "unverified"},
                         {"verified_by": "wrong-user"}, {"evidence_url": "https://evil.invalid"},
                         {"store_id": "9N0000000000"}):
             with self.subTest(changes=changes):
                 self.assertFalse(GitHubReturnClient._existing_matches(
-                    wrapped({**approved, **changes}), official))
+                    wrapped({**approved, **changes}), official, selected_job, package))
         for missing in approved:
             with self.subTest(missing=missing):
                 self.assertFalse(GitHubReturnClient._existing_matches(
-                    wrapped({k: v for k, v in approved.items() if k != missing}), official))
-        self.assertFalse(GitHubReturnClient._existing_matches(wrapped([]), official))
+                    wrapped({k: v for k, v in approved.items() if k != missing}), official, selected_job, package))
+        self.assertFalse(GitHubReturnClient._existing_matches(wrapped([]), official, selected_job, package))
 
     def test_existing_identity_reports_branch_commit_not_blob_sha(self):
         official = evidence()
+        selected_job = Job.validate(job(), config())
+        package = package_result()
         approved = {
             "reviewed": True, "source": "partner_center",
-            **{k: official[k] for k in ("store_id", "name", "publisher", "version")},
+            **{k: official[k] for k in ("store_id", "name", "publisher", "version",
+                                        "package_family_name", "package_sid")},
+            "request_id": selected_job.request_id, "product_type": selected_job.product_type,
+            "source_factory": selected_job.source_factory, "source_repository": selected_job.source_repository,
+            "source_branch": selected_job.source_branch, "source_sha": selected_job.source_sha,
+            "verified_source_sha": selected_job.source_sha, "package_sha256": package["sha256"],
+            "signature_status": package["signature_status"],
             "verified_by": official["authenticated_account"],
             "evidence_url": official["official_evidence_url"],
         }
@@ -290,7 +326,7 @@ class GitHubReturnTests(unittest.TestCase):
                         "content": base64.b64encode(json.dumps(approved).encode()).decode()}}
             raise AssertionError("unexpected API write or read: " + endpoint)
         result = GitHubReturnClient(fake_api).return_identity(
-            Job.validate(job(), config()), config(), official, True)
+            selected_job, config(), official, package, True)
         self.assertEqual(result["status"], "EXISTING_VERIFIED")
         self.assertEqual(result["commit_sha"], SHA)
         self.assertNotEqual(result["commit_sha"], "b" * 40)
@@ -298,13 +334,15 @@ class GitHubReturnTests(unittest.TestCase):
     def test_no_apply_is_side_effect_free(self):
         def forbidden(*_a, **_k):
             raise AssertionError("API must not be called")
-        result = GitHubReturnClient(forbidden).return_identity(Job.validate(job(), config()), config(), evidence(), False)
+        result = GitHubReturnClient(forbidden).return_identity(
+            Job.validate(job(), config()), config(), evidence(), package_result(), False)
         self.assertEqual(result["status"], "NOT_APPLIED")
     def test_head_mismatch_is_conflict(self):
         def wrong_head(*_a, **_k):
             return {"object": {"sha": "c" * 40}}
         with self.assertRaises(ConflictError):
-            GitHubReturnClient(wrong_head).return_identity(Job.validate(job(), config()), config(), evidence(), True)
+            GitHubReturnClient(wrong_head).return_identity(
+                Job.validate(job(), config()), config(), evidence(), package_result(), True)
     def test_existing_different_identity_is_conflict(self):
         def existing(endpoint, body=None, allow_missing=False):
             if "git/ref" in endpoint:
@@ -317,7 +355,23 @@ class GitHubReturnTests(unittest.TestCase):
                 return {"encoding": "base64", "content": base64.b64encode(raw).decode()}
             return {"encoding": "base64", "content": base64.b64encode(b'{"store_id":"OTHER000"}').decode()}
         with self.assertRaises(ConflictError):
-            GitHubReturnClient(existing).return_identity(Job.validate(job(), config()), config(), evidence(), True)
+            GitHubReturnClient(existing).return_identity(
+                Job.validate(job(), config()), config(), evidence(), package_result(), True)
+
+    def test_job_work_branch_drives_ref_read_and_atomic_write(self):
+        selected = "codex/product/sample-product"
+        seen = []
+
+        def api(endpoint, body=None, allow_missing=False):
+            seen.append((endpoint, body))
+            return self.api(endpoint, body, allow_missing)
+
+        result = GitHubReturnClient(api).return_identity(
+            Job.validate(job(source_branch=selected), config()), config(), evidence(), package_result(), True)
+        self.assertEqual(result["branch"], selected)
+        self.assertIn("git/ref/heads/" + selected, seen[0][0])
+        graphql = next(body for endpoint, body in seen if endpoint == "graphql")
+        self.assertEqual(graphql["variables"]["input"]["branch"]["branchName"], selected)
 
 
 class OrchestratorTests(unittest.TestCase):
@@ -502,6 +556,16 @@ class FailureClassificationTests(unittest.TestCase):
             GitHubReturnClient._gh_api("graphql")
     def test_secret_redaction(self):
         self.assertNotIn("supersecret", redact("Authorization: bearer supersecret"))
+    def test_build_failure_keeps_redacted_root_cause_from_output_tail(self):
+        completed = subprocess.CompletedProcess(
+            ["builder"], 17, "stdout detail", "Authorization: bearer supersecret\n" + "noise" * 500 + "\nROOT_CAUSE")
+        with patch("subprocess.run", return_value=completed), self.assertRaises(HoldError) as raised:
+            PackageBuilder._run(["builder"], ROOT, 10)
+        message = str(raised.exception)
+        self.assertIn("exit 17", message)
+        self.assertIn("ROOT_CAUSE", message)
+        self.assertIn("[REDACTED]", message)
+        self.assertNotIn("supersecret", message)
     def test_signal_sprint_builder_selects_real_game_not_newer_decoy(self):
         class StubBuilder(PackageBuilder):
             def _build_windows(self, source):
@@ -534,6 +598,20 @@ class FailureClassificationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(HoldError):
                 PackageBuilder()._build_windows(Path(tmp))
+    def test_windows_builder_prefers_pwsh_for_factory_script(self):
+        calls = []
+        class RecordingBuilder(PackageBuilder):
+            @staticmethod
+            def _run(command, cwd, timeout):
+                calls.append((command, cwd, timeout))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / "scripts" / "build-windows.ps1"
+            script.parent.mkdir()
+            script.write_text("Write-Output ok", encoding="utf-8")
+            with patch("shutil.which", side_effect=lambda name: "C:/tools/pwsh.exe" if name == "pwsh" else None):
+                RecordingBuilder()._build_windows(root)
+        self.assertEqual(calls[0][0][0], "C:/tools/pwsh.exe")
     def test_godot_missing_project_is_hold(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

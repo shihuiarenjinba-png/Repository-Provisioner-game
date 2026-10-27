@@ -17,4 +17,4 @@ python provisioner.py --input job.json --output result.json `
   --official-identity C:\secure\partner-center-evidence.json --apply
 ```
 
-返却先は `shihuiarenjinba-png/AI-Game-Factory` の `codex/factory-autoloop-20261026`、`products/<slug>/store/approved-identity.json` に固定されています。入力・出力契約は `schemas/`、運用とHOLD項目は `docs/LOCAL_PROVISIONER_HANDOFF.md` を参照してください。
+返却先リポジトリは `shihuiarenjinba-png/AI-Game-Factory` に固定し、ブランチは入力 `source_branch` と同じ安全な `codex/*` 作業ブランチを使用します。`main`、`release`、不正なブランチ名は拒否します。返却パスは `products/<slug>/store/approved-identity.json` です。入力・出力契約は `schemas/`、運用とHOLD項目は `docs/LOCAL_PROVISIONER_HANDOFF.md` を参照してください。
