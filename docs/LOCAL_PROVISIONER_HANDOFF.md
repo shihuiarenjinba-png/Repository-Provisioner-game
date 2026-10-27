@@ -274,6 +274,14 @@ HEAD remains `CONFLICT`; no existing file is overwritten.
 - Live CAS: not run. Authenticated official Identity is absent.
 - Current product state: `HOLD / EXTERNAL_IDENTITY`; `e2e_pass=false`.
 
+## 2026-10-27 — restart-safe local worker integration checkpoint
+
+- Draft PR: [#9](https://github.com/shihuiarenjinba-png/Repository-Provisioner-game/pull/9), based on the current PR #8 safety branch. Implementation checkpoint `5c1db9820bac68c59cc7eb6ca5921e22a5bb3913`; no main/release write or merge.
+- Verification after rebasing onto PR #8 HEAD `c217652c7887626de94e8b37ca3f1f7a57f9064d`: targeted 80/80 PASS, full 86/86 PASS, Python compile PASS. GitHub Actions run `40488277940` passed on Ubuntu and Windows.
+- Windows-all-auto Draft PR #17 used `--resume-result` to re-inspect the previously accepted Signal Sprint EXE rather than rebuilding nondeterministic bytes. It matched SHA-256 `e8517df8cd31a40e5ce72afdd4e6a4d63626fb99f7ff8a4fa3296ff8deef05f4`, 11,387,518 bytes, `NOTSIGNED`.
+- No official Partner Center evidence existed. The local worker reached `WAITING_OFFICIAL_IDENTITY / EXTERNAL_IDENTITY`; repeated execution did not mutate the prior Provisioner result. Factory HEAD remained the immutable source SHA and `approved-identity.json` remained absent (GitHub 404).
+- Current status is **code/test path complete, official Identity pending, real E2E not complete**. Resume at local evidence acquisition, then check-only, explicit human approval, final Factory HEAD check, existing Provisioner CAS, receipt, and only then a separate Factory MSIX build branch.
+
 The same branch also accepts `--resume-result <prior-result.json>` for the
 pre-Identity GAME EXE stage. Provisioner, not Windows-all-auto, reloads the
 prior result, checks every immutable request/source field, re-hashes and
