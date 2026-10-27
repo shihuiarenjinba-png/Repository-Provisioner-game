@@ -534,7 +534,7 @@ class GitHubReturnClient:
         return {**proposal, "status": "APPLIED", "commit_sha": commit["oid"], "commit_url": commit.get("url")}
 
     def _verify_product(self, base: str, job: Job, config: ProductConfig) -> None:
-        branch = quote(config.source_branch, safe="")
+        branch = quote(job.source_branch, safe="")
         if config.product_type == "GAME_3D":
             item = self.api(base + f"contents/products/{job.slug}/project.godot?ref=" + branch)
             if b"run/main_scene" not in self._decode_content(item, 128_000):
