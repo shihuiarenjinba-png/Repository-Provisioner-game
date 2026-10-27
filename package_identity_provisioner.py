@@ -791,12 +791,42 @@ class GitHubReturnClient:
 class Provisioner:
     def __init__(self, config: ProductConfig, state_dir: Path, work_dir: Path,
                  source: SourceManager | None = None, builder: PackageBuilder | None = None,
-                 identity: OfficialIdentityProvider | None = None, github: GitHubReturnClient | None = None):
+                 identity: OfficialIdentityProvider | None = None, github: GitHubReturnClient | None = None,
+                 resume_result: Path | None = None):
         self.config = config
         self.ledger = Ledger(state_dir / config.product_type.lower())
         self.work_dir = work_dir / config.product_type.lower()
         self.source, self.builder = source or SourceManager(), builder or PackageBuilder()
         self.identity, self.github = identity or OfficialIdentityProvider(None), github or GitHubReturnClient()
+        self.resume_result = resume_result
+
+    def _resume_package(self, job: Job) -> dict[str, Any] | None:
+        """Re-inspect one prior Provisioner EXE result without rebuilding bytes."""
+        if self.resume_result is None:
+            return None
+        raw = load_json(self.resume_result, 262_144)
+        expected = {
+            "request_id": job.request_id, "product_type": job.product_type,
+            "source_factory": job.source_factory, "source_repository": job.source_repository,
+            "source_branch": job.source_branch, "source_sha": job.source_sha, "slug": job.slug,
+            "status": "HOLD", "next_stage": "OBTAIN_AUTHENTICATED_OFFICIAL_IDENTITY",
+        }
+        if any(raw.get(key) != value for key, value in expected.items()):
+            raise ConflictError("Resume result belongs to another request, source or stage")
+        if (self.config.product_type != "GAME"
+                or (raw.get("github_return") or {}).get("status") != "NOT_APPLIED"
+                or (raw.get("official_identity") or {}).get("status") != "UNVERIFIED"):
+            raise ConflictError("Resume result is not a pre-Identity GAME EXE hold")
+        previous = raw.get("package")
+        if not isinstance(previous, dict) or previous.get("kind") != "exe":
+            raise ConflictError("Resume result has no verified GAME EXE")
+        path = Path(str(previous.get("path", "")))
+        inspected = inspect_package(path)
+        verify_game_windows_exe(path)
+        for key in ("kind", "sha256", "size_bytes", "signature_status"):
+            if inspected.get(key) != previous.get(key):
+                raise ConflictError("Resume EXE bytes or inspection metadata changed")
+        return inspected
 
     def run(self, raw: dict[str, Any], apply: bool = False) -> dict[str, Any]:
         started = utc_now()
@@ -840,8 +870,10 @@ class Provisioner:
                     return response
                 try:
                     root = self.work_dir / hashlib.sha256(job.request_id.encode()).hexdigest()[:16]
-                    source_dir = self.source.acquire(job, root / "source")
-                    package = inspect_package(self.builder.build(job, source_dir, root / "artifacts", self.config))
+                    package = self._resume_package(job)
+                    if package is None:
+                        source_dir = self.source.acquire(job, root / "source")
+                        package = inspect_package(self.builder.build(job, source_dir, root / "artifacts", self.config))
                     if (self.config.product_type == "GAME" and package["kind"] in {"msix", "appx"}
                             and not (package.get("has_executable")
                                      and package.get("manifest_executable_present"))):
@@ -960,13 +992,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--work-dir", type=Path, default=Path(".provisioner-work"))
     parser.add_argument("--official-identity", type=Path,
                         help="Operator export from an authenticated Partner Center session; never source-controlled")
+    parser.add_argument("--resume-result", type=Path,
+                        help="Prior pre-Identity Provisioner result whose exact local EXE will be re-inspected")
     parser.add_argument("--apply", action="store_true", help="Atomically write to the configured Factory work branch")
     args = parser.parse_args(argv)
     started = utc_now()
     try:
         config, raw = ProductConfig.load(args.config), load_json(args.input)
         result = Provisioner(config, args.state_dir, args.work_dir,
-                             identity=OfficialIdentityProvider(args.official_identity)).run(raw, apply=args.apply)
+                             identity=OfficialIdentityProvider(args.official_identity),
+                             resume_result=args.resume_result).run(raw, apply=args.apply)
     except ProvisionerError as exc:
         result = {"schema_version": SCHEMA_VERSION, "request_id": None, "product_type": None,
                   "status": exc.status, "errors": [redact(str(exc))], "started_at": started, "finished_at": utc_now()}

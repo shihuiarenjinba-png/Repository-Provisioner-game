@@ -273,3 +273,14 @@ HEAD remains `CONFLICT`; no existing file is overwritten.
 - Full Provisioner regression: 83/83 PASS; Python compile PASS.
 - Live CAS: not run. Authenticated official Identity is absent.
 - Current product state: `HOLD / EXTERNAL_IDENTITY`; `e2e_pass=false`.
+
+The same branch also accepts `--resume-result <prior-result.json>` for the
+pre-Identity GAME EXE stage. Provisioner, not Windows-all-auto, reloads the
+prior result, checks every immutable request/source field, re-hashes and
+re-inspects the referenced PE file, and only then uses its existing Identity
+provider and GitHub CAS client. This is required because rebuilding the same
+PyInstaller source produced different bytes; the already inspected Signal
+Sprint EXE remains pinned to SHA-256
+`e8517df8cd31a40e5ce72afdd4e6a4d63626fb99f7ff8a4fa3296ff8deef05f4`
+and 11,387,518 bytes. A changed/missing result or EXE is `CONFLICT`; the
+resume input never authorizes a Store submission or bypasses official Identity.

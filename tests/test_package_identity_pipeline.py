@@ -514,6 +514,53 @@ class OrchestratorTests(unittest.TestCase):
                            source=source or FakeSource(), builder=builder or FakeBuilder(),
                            identity=identity or FakeIdentity(), github=github or FakeGitHub())
 
+    def resume_fixture(self, root):
+        builder = FakeBuilder(artifact_kind="exe")
+        package_path = builder.build(Job.validate(job(), config()), Path(root), Path(root) / "prior", config())
+        package = inspect_package(package_path)
+        result = {
+            "schema_version": "1.0", "request_id": "req-0001",
+            "product_type": config().product_type, "source_factory": config().source_factory,
+            "source_repository": config().source_repository,
+            "source_branch": config().source_branch, "source_sha": SHA,
+            "slug": "sample-product", "status": "HOLD",
+            "package": package,
+            "official_identity": {"status": "UNVERIFIED", "store_id": None},
+            "github_return": {"status": "NOT_APPLIED", "commit_sha": None},
+            "next_stage": "OBTAIN_AUTHENTICATED_OFFICIAL_IDENTITY",
+        }
+        path = Path(root) / "prior-result.json"
+        path.write_text(json.dumps(result), encoding="utf-8")
+        return path, package
+
+    def test_resume_result_reinspects_exact_exe_without_rebuild(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            resume, package = self.resume_fixture(tmp)
+            source, builder = FakeSource(), FakeBuilder(artifact_kind="exe")
+            runner = Provisioner(config(), Path(tmp) / "state", Path(tmp) / "work",
+                                 source=source, builder=builder,
+                                 identity=FakeIdentity(error=HoldError("no identity")),
+                                 github=FakeGitHub(), resume_result=resume)
+            result = runner.run(job(), apply=False)
+            self.assertEqual(result["next_stage"], "OBTAIN_AUTHENTICATED_OFFICIAL_IDENTITY")
+            self.assertEqual(result["package"]["sha256"], package["sha256"])
+            self.assertEqual(source.calls, 0)
+            self.assertEqual(builder.calls, 0)
+
+    def test_resume_result_can_reach_existing_github_cas_client(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            resume, package = self.resume_fixture(tmp)
+            source, builder, github = FakeSource(), FakeBuilder(artifact_kind="exe"), FakeGitHub()
+            runner = Provisioner(config(), Path(tmp) / "state", Path(tmp) / "work",
+                                 source=source, builder=builder, identity=FakeIdentity(),
+                                 github=github, resume_result=resume)
+            result = runner.run(job(), apply=False)
+            self.assertEqual(result["next_stage"], "APPLY_VERIFIED_GITHUB_RETURN")
+            self.assertEqual(result["package"]["sha256"], package["sha256"])
+            self.assertEqual(github.calls, 1)
+            self.assertEqual(source.calls, 0)
+            self.assertEqual(builder.calls, 0)
+
     def test_dry_run_has_no_external_side_effect(self):
         with tempfile.TemporaryDirectory() as tmp:
             source, builder, identity, github = FakeSource(), FakeBuilder(), FakeIdentity(), FakeGitHub()
