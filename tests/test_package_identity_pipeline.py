@@ -207,6 +207,9 @@ class GitHubReturnTests(unittest.TestCase):
         if "/manifest.json" in endpoint:
             raw = json.dumps({"slug": "sample-product", "kind": "app" if config().product_type == "APP" else "game"}).encode()
             return {"encoding": "base64", "content": base64.b64encode(raw).decode()}
+        if "/proposals/" in endpoint:
+            raw = json.dumps({"slug": "sample-product", "title": "Sample Product"}).encode()
+            return {"encoding": "base64", "content": base64.b64encode(raw).decode()}
         if "/project.godot" in endpoint:
             return {"encoding": "base64", "content": base64.b64encode(b"run/main_scene=x").decode()}
         if "/approved-identity.json" in endpoint:
@@ -235,6 +238,9 @@ class GitHubReturnTests(unittest.TestCase):
                 return {"object": {"sha": SHA}}
             if "/manifest.json" in endpoint:
                 raw = json.dumps({"slug": "sample-product", "kind": "app" if config().product_type == "APP" else "game"}).encode()
+                return {"encoding": "base64", "content": base64.b64encode(raw).decode()}
+            if "/proposals/" in endpoint:
+                raw = json.dumps({"slug": "sample-product", "title": "Sample Product"}).encode()
                 return {"encoding": "base64", "content": base64.b64encode(raw).decode()}
             return {"encoding": "base64", "content": base64.b64encode(b'{"store_id":"OTHER000"}').decode()}
         with self.assertRaises(ConflictError):

@@ -29,6 +29,7 @@ import xml.etree.ElementTree as ET
 SCHEMA_VERSION = "1.0"
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
 SLUG = re.compile(r"^[a-z][a-z0-9-]{3,39}$")
+GAME_WORK_BRANCH = re.compile(r"^codex/[A-Za-z0-9][A-Za-z0-9._/-]{0,120}$")
 REQUEST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{3,127}$")
 VERSION = re.compile(r"^\d{1,5}(?:\.\d{1,5}){3}$")
 STORE_ID = re.compile(r"^[A-Za-z0-9]{8,32}$")
@@ -145,10 +146,20 @@ class Job:
         if raw["product_type"] != config.product_type:
             raise HoldError("Product type belongs to a different Provisioner")
         exact = {"source_factory": config.source_factory, "source_repository": config.source_repository,
-                 "source_branch": config.source_branch, "target_owner": config.target_owner}
+                 "target_owner": config.target_owner}
         for field, expected in exact.items():
             if raw[field] != expected:
                 raise HoldError(f"{field} is not the configured allowlisted value")
+        branch = raw["source_branch"]
+        if config.product_type == "GAME":
+            # Product branches are independent; only codex/* within the fixed
+            # GAME Factory repository is writable. Never accept main/release.
+            if (not isinstance(branch, str) or not GAME_WORK_BRANCH.fullmatch(branch)
+                    or ".." in branch or "//" in branch or branch.endswith(("/", "."))
+                    or any(part.startswith(".") or part.endswith(".lock") for part in branch.split("/"))):
+                raise HoldError("GAME source_branch must be a safe codex/* work branch")
+        elif branch != config.source_branch:
+            raise HoldError("source_branch is not the configured allowlisted value")
         if not isinstance(raw["source_sha"], str) or not SHA40.fullmatch(raw["source_sha"]) or set(raw["source_sha"]) == {"0"}:
             raise HoldError("source_sha must be an exact non-placeholder lowercase Git SHA")
         if not isinstance(raw["slug"], str) or not SLUG.fullmatch(raw["slug"]):
@@ -491,15 +502,15 @@ class GitHubReturnClient:
     def return_identity(self, job: Job, config: ProductConfig, official: dict[str, Any], apply: bool) -> dict[str, Any]:
         target_path = f"products/{job.slug}/store/approved-identity.json"
         base = f"repos/{config.source_repository}/"
-        proposal = {"status": "NOT_APPLIED", "repository": config.source_repository, "branch": config.source_branch,
+        proposal = {"status": "NOT_APPLIED", "repository": config.source_repository, "branch": job.source_branch,
                     "path": target_path, "commit_sha": None, "commit_url": None}
         if not apply:
             return proposal
-        ref = self.api(base + "git/ref/heads/" + config.source_branch)
+        ref = self.api(base + "git/ref/heads/" + job.source_branch)
         if not isinstance(ref, dict) or ref.get("object", {}).get("sha") != job.source_sha:
             raise ConflictError("Factory HEAD changed before identity return")
         self._verify_product(base, job, config)
-        existing = self.api(base + "contents/" + target_path + "?ref=" + quote(config.source_branch, safe=""), allow_missing=True)
+        existing = self.api(base + "contents/" + target_path + "?ref=" + quote(job.source_branch, safe=""), allow_missing=True)
         if existing is not None:
             if self._existing_matches(existing, official):
                 return {**proposal, "status": "EXISTING_VERIFIED", "commit_sha": existing.get("sha")}
@@ -509,7 +520,7 @@ class GitHubReturnClient:
                     "verified_by": official["authenticated_account"], "evidence_url": official["official_evidence_url"]}
         content = json.dumps(approved, ensure_ascii=False, indent=2) + "\n"
         body = {"query": self.MUTATION, "variables": {"input": {
-            "branch": {"repositoryNameWithOwner": config.source_repository, "branchName": config.source_branch},
+            "branch": {"repositoryNameWithOwner": config.source_repository, "branchName": job.source_branch},
             "message": {"headline": "store: return verified Partner Center identity for " + job.slug},
             "expectedHeadOid": job.source_sha,
             "fileChanges": {"additions": [{"path": target_path,
@@ -523,7 +534,7 @@ class GitHubReturnClient:
         return {**proposal, "status": "APPLIED", "commit_sha": commit["oid"], "commit_url": commit.get("url")}
 
     def _verify_product(self, base: str, job: Job, config: ProductConfig) -> None:
-        branch = quote(config.source_branch, safe="")
+        branch = quote(job.source_branch, safe="")
         if config.product_type == "GAME_3D":
             item = self.api(base + f"contents/products/{job.slug}/project.godot?ref=" + branch)
             if b"run/main_scene" not in self._decode_content(item, 128_000):
@@ -537,6 +548,15 @@ class GitHubReturnClient:
             expected_kind = "app" if config.product_type == "APP" else "game"
             if not isinstance(manifest, dict) or manifest.get("slug") != job.slug or manifest.get("kind") != expected_kind:
                 raise ConflictError("Factory product manifest slug/kind mismatch")
+            if config.product_type == "GAME":
+                proposal_item = self.api(base + f"contents/proposals/{job.slug}.json?ref=" + branch)
+                try:
+                    proposal = json.loads(self._decode_content(proposal_item, 16_000))
+                except json.JSONDecodeError as exc:
+                    raise ConflictError("Factory GAME proposal is invalid JSON") from exc
+                if (not isinstance(proposal, dict) or proposal.get("slug") != job.slug
+                        or proposal.get("title") != job.display_name):
+                    raise ConflictError("Factory GAME product slug/display_name mismatch")
 
     @staticmethod
     def _decode_content(item: Any, limit: int) -> bytes:
@@ -669,7 +689,7 @@ class Provisioner:
                 "official_identity": {"status": "UNVERIFIED", "store_id": None, "name": None, "publisher": None,
                                       "version": None, "official_evidence_url": None},
                 "github_return": {"status": "NOT_APPLIED", "repository": self.config.source_repository,
-                                  "branch": self.config.source_branch,
+                                  "branch": job.source_branch,
                                   "path": f"products/{job.slug}/store/approved-identity.json", "commit_sha": None},
                 "windows_all_auto_record": None, "errors": [], "next_stage": None}
 
