@@ -300,6 +300,15 @@ class IdentityEvidenceTests(unittest.TestCase):
             path.write_text(json.dumps(evidence()), encoding="utf-8")
             result = OfficialIdentityProvider(path).lookup(Job.validate(job(), config()))
         self.assertEqual(result["store_id"], "9N1234567890")
+    def test_official_identity_verification_timestamp_must_be_real_and_not_future(self):
+        for timestamp in (None, "", "not-a-timestamp", "2026-10-26T00:00:00",
+                          "2026-02-30T00:00:00Z", "3026-10-26T00:00:00Z"):
+            with self.subTest(verified_at=timestamp), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "identity.json"
+                path.write_text(json.dumps(evidence(verified_at=timestamp)), encoding="utf-8")
+                with self.assertRaisesRegex(HoldError, "verification timestamp"):
+                    OfficialIdentityProvider(path).lookup(Job.validate(job(), config()))
+
     def test_duplicate_official_identity_source_sha_is_hold(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "identity.json"
