@@ -432,7 +432,7 @@ def verify_game_windows_exe(path: Path) -> None:
         if offset < 64 or offset > 1_048_576 or offset + 4 > path.stat().st_size:
             raise HoldError("GAME executable has invalid PE header offset")
         handle.seek(offset)
-        if handle.read(4) != b"PE\\x00\\x00":
+        if handle.read(4) != b"PE\x00\x00":
             raise HoldError("GAME executable has no PE signature")
 
 
