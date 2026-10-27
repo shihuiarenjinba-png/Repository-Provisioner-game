@@ -465,6 +465,34 @@ class FailureClassificationTests(unittest.TestCase):
             GitHubReturnClient._gh_api("graphql")
     def test_secret_redaction(self):
         self.assertNotIn("supersecret", redact("Authorization: bearer supersecret"))
+    def test_signal_sprint_builder_selects_real_game_not_newer_decoy(self):
+        class StubBuilder(PackageBuilder):
+            def _build_windows(self, source):
+                output = source / "dist" / "game"
+                output.mkdir(parents=True)
+                (output / "SignalSprint.exe").write_bytes(b"MZ" + b"game" * 100)
+                (output / "Helper.exe").write_bytes(b"MZ" + b"decoy" * 100)
+                os.utime(output / "Helper.exe", (2_000_000_000, 2_000_000_000))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            built = StubBuilder().build(
+                Job.validate(job(slug="signal-sprint"), config()),
+                root, root / "out", config())
+            self.assertEqual(built.name, "SignalSprint.exe")
+
+    def test_signal_sprint_builder_rejects_missing_expected_executable(self):
+        class WrongBuilder(PackageBuilder):
+            def _build_windows(self, source):
+                output = source / "dist" / "game"
+                output.mkdir(parents=True)
+                (output / "Helper.exe").write_bytes(b"MZ" + b"decoy" * 100)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self.assertRaisesRegex(HoldError, "fresh pinned executable"):
+                WrongBuilder().build(
+                    Job.validate(job(slug="signal-sprint"), config()),
+                    root, root / "out", config())
+
     def test_live_builder_rejects_unknown_entrypoint(self):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(HoldError):
