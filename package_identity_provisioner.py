@@ -302,6 +302,16 @@ class PackageBuilder:
         unique = sorted({p.resolve() for p in candidates if p.is_file()}, key=lambda p: p.stat().st_mtime)
         if not unique:
             raise HoldError("Build completed without a configured EXE/MSIX candidate")
+        # The generic **/*.exe glob can also find a helper or a stale EXE.
+        # Pin the active GAME product to the executable emitted by its real
+        # Windows build entrypoint; never inspect or return a decoy instead.
+        if config.product_type == "GAME" and job.slug == "signal-sprint":
+            expected = source / "dist" / "game" / "SignalSprint.exe"
+            if ((source / "dist").is_symlink() or (source / "dist" / "game").is_symlink()
+                    or expected.is_symlink() or not expected.is_file()
+                    or expected.resolve() not in unique):
+                raise HoldError("Signal Sprint build did not produce a fresh pinned executable")
+            return expected.resolve()
         return unique[-1]
 
     @staticmethod
@@ -407,6 +417,25 @@ def signature_status(path: Path) -> str:
     return result.stdout.strip().upper() if result.returncode == 0 and result.stdout.strip() else "INSPECTION_FAILED"
 
 
+def verify_game_windows_exe(path: Path) -> None:
+    """Check real PE structure before using a GAME EXE as Identity-return evidence.
+
+    This does not replace GUI testing or establish Store/MSIX readiness.
+    """
+    if path.is_symlink() or not path.is_file() or path.stat().st_size < 100_000:
+        raise HoldError("GAME Windows executable is missing, linked or implausibly small")
+    with path.open("rb") as handle:
+        dos = handle.read(64)
+        if len(dos) < 64 or dos[:2] != b"MZ":
+            raise HoldError("GAME executable is not a Windows PE candidate")
+        offset = int.from_bytes(dos[0x3c:0x40], "little")
+        if offset < 64 or offset > 1_048_576 or offset + 4 > path.stat().st_size:
+            raise HoldError("GAME executable has invalid PE header offset")
+        handle.seek(offset)
+        if handle.read(4) != b"PE\x00\x00":
+            raise HoldError("GAME executable has no PE signature")
+
+
 def inspect_package(path: Path) -> dict[str, Any]:
     if not path.is_file():
         raise HoldError("Package artifact does not exist")
@@ -424,6 +453,14 @@ def inspect_package(path: Path) -> dict[str, Any]:
         return result
     try:
         with zipfile.ZipFile(path) as archive:
+            members = archive.infolist()
+            # Never accept a package whose manifest is intact but its EXE or
+            # another payload has a corrupt CRC. Bound decompression first.
+            if (not members or len(members) > 2000 or
+                    sum(member.file_size for member in members) > 300 * 1024 * 1024):
+                raise HoldError("MSIX has excessive or missing ZIP payload")
+            if archive.testzip() is not None:
+                raise HoldError("MSIX contains a CRC-corrupted payload")
             manifest_name = next((n for n in archive.namelist() if n.lower() == "appxmanifest.xml"), None)
             if manifest_name is None:
                 raise HoldError("MSIX is missing AppxManifest.xml")
@@ -487,6 +524,9 @@ def compare_package_identity(package: dict[str, Any], official: dict[str, Any]) 
 
 def windows_all_auto_record(job: Job, official: dict[str, Any]) -> dict[str, Any]:
     return {"schema_version": 1, "type": {"APP": "app", "GAME": "game", "GAME_3D": "3d-game"}[job.product_type],
+            "request_id": job.request_id, "product_type": job.product_type,
+            "source_factory": job.source_factory, "source_repository": job.source_repository,
+            "source_branch": job.source_branch, "source_sha": job.source_sha,
             "slug": job.slug, "expected_head_sha": job.source_sha,
             "official_evidence_url": official["official_evidence_url"], "operator_verified": True,
             "verified_by": official["authenticated_account"],
@@ -513,7 +553,7 @@ class GitHubReturnClient:
         existing = self.api(base + "contents/" + target_path + "?ref=" + quote(job.source_branch, safe=""), allow_missing=True)
         if existing is not None:
             if self._existing_matches(existing, official):
-                return {**proposal, "status": "EXISTING_VERIFIED", "commit_sha": existing.get("sha")}
+                return {**proposal, "status": "EXISTING_VERIFIED", "commit_sha": ref["object"]["sha"]}
             raise ConflictError("approved-identity.json already exists and will not be overwritten")
         approved = {"reviewed": True, "source": "partner_center", "store_id": official["store_id"],
                     "name": official["name"], "publisher": official["publisher"], "version": official["version"],
@@ -572,13 +612,23 @@ class GitHubReturnClient:
 
     @staticmethod
     def _existing_matches(existing: dict[str, Any], official: dict[str, Any]) -> bool:
-        if existing.get("encoding") != "base64":
+        # Matching Identity fields alone do not establish Partner Center review.
+        if not isinstance(existing, dict) or existing.get("encoding") != "base64":
             return False
         try:
             content = json.loads(base64.b64decode(existing["content"], validate=True))
-        except Exception:
+            expected = {
+                "reviewed": True, "source": "partner_center",
+                **{key: official[key] for key in ("store_id", "name", "publisher", "version")},
+                "verified_by": official["authenticated_account"],
+                "evidence_url": official["official_evidence_url"],
+            }
+        except (KeyError, ValueError, TypeError, json.JSONDecodeError):
             return False
-        return all(content.get(key) == official.get(key) for key in ("store_id", "name", "publisher", "version"))
+        return isinstance(content, dict) and all(
+            type(content.get(key)) is type(value) and content.get(key) == value
+            for key, value in expected.items()
+        )
 
     @staticmethod
     def _gh_api(endpoint: str, body: dict[str, Any] | None = None, allow_missing: bool = False) -> Any:
@@ -647,6 +697,15 @@ class Provisioner:
                     return response
                 if previous and prior_status in FINAL_STATUSES and not promoted:
                     return {**previous["response"], "idempotent_replay": True}
+                # A GAME EXE with a completed official Identity return is a
+                # terminal *stage*, not a finished MSIX. Never reapply it on replay.
+                prior_response = (previous or {}).get("response", {})
+                if (previous and prior_status == "HOLD"
+                        and prior_response.get("next_stage") == "GITHUB_REBUILD_MSIX"
+                        and prior_response.get("github_return", {}).get("status")
+                        in {"APPLIED", "EXISTING_VERIFIED"}
+                        and prior_response.get("package", {}).get("kind") == "exe"):
+                    return {**prior_response, "idempotent_replay": True}
                 if job.dry_run:
                     response = self._base_response(job, "DRY_RUN", started)
                     response["next_stage"] = "SUBMIT_NON_DRY_RUN_AFTER_REVIEW"
@@ -656,6 +715,39 @@ class Provisioner:
                     root = self.work_dir / hashlib.sha256(job.request_id.encode()).hexdigest()[:16]
                     source_dir = self.source.acquire(job, root / "source")
                     package = inspect_package(self.builder.build(job, source_dir, root / "artifacts", self.config))
+                    # Signal Sprint currently produces a real unsigned EXE.
+                    # The official Identity must be returned BEFORE the Factory
+                    # can create an MSIX. Preserve the EXE SHA as a HOLD stage,
+                    # never mistake it for an MSIX or queue it to Windows-all-auto.
+                    if self.config.product_type == "GAME" and package["kind"] == "exe":
+                        verify_game_windows_exe(Path(package["path"]))
+                        try:
+                            official = self.identity.lookup(job)
+                        except HoldError as exc:
+                            response = self._base_response(job, "HOLD", started)
+                            response.update(package=package,
+                                            errors=[redact(str(exc))],
+                                            next_stage="OBTAIN_AUTHENTICATED_OFFICIAL_IDENTITY")
+                            self._save(job, response, {"stage": "EXE_BUILT_IDENTITY_HOLD",
+                                                       "package_sha256": package["sha256"]})
+                            return response
+                        returned = self.github.return_identity(job, self.config, official, apply=apply)
+                        applied = returned["status"] in {"APPLIED", "EXISTING_VERIFIED"}
+                        response = self._base_response(job, "HOLD", started)
+                        response.update(
+                            package=package,
+                            official_identity={"status": "VERIFIED_OPERATOR_EXPORT",
+                                               **{k: official[k] for k in
+                                                  ("store_id", "name", "publisher", "version",
+                                                   "official_evidence_url", "verified_at")}},
+                            github_return=returned,
+                            windows_all_auto_record=None,
+                            errors=["EXE_QA_ONLY: a verified real MSIX is not yet built"],
+                            next_stage=("GITHUB_REBUILD_MSIX" if applied
+                                        else "APPLY_VERIFIED_GITHUB_RETURN"))
+                        self._save(job, response, {"stage": "EXE_IDENTITY_" + returned["status"],
+                                                   "package_sha256": package["sha256"]})
+                        return response
                     official = self.identity.lookup(job)
                     compare_package_identity(package, official)
                     contract = windows_all_auto_record(job, official)
@@ -680,7 +772,8 @@ class Provisioner:
 
     def _base_response(self, job: Job, status: str, started: str) -> dict[str, Any]:
         return {"schema_version": SCHEMA_VERSION, "request_id": job.request_id, "product_type": job.product_type,
-                "status": status, "source_repository": job.source_repository, "source_branch": job.source_branch,
+                "status": status, "source_factory": job.source_factory,
+                "source_repository": job.source_repository, "source_branch": job.source_branch,
                 "source_sha": job.source_sha, "slug": job.slug, "started_at": started, "finished_at": utc_now(),
                 "idempotent_replay": False,
                 "package": {"status": "NOT_BUILT", "sha256": None, "path": None, "package_identity": None,

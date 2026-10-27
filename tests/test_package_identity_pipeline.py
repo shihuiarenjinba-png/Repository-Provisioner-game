@@ -82,7 +82,11 @@ class FakeBuilder:
         path = output_dir / ("candidate.msix" if self.artifact_kind == "msix" else "candidate.exe")
         if self.artifact_kind == "msix":
             return make_msix(path, name=self.name)
-        path.write_bytes(b"MZ-not-a-real-binary")
+        pe = bytearray(100_100)
+        pe[:2] = b"MZ"
+        pe[0x3c:0x40] = (0x80).to_bytes(4, "little")
+        pe[0x80:0x84] = b"PE\x00\x00"
+        path.write_bytes(pe)
         return path
 
 
@@ -167,6 +171,18 @@ class PackageInspectionTests(unittest.TestCase):
             path.write_bytes(b"not zip")
             with self.assertRaises(HoldError):
                 inspect_package(path)
+    def test_msix_with_corrupt_non_manifest_payload_is_hold(self):
+        # The manifest is still valid: CRC checking must cover every payload.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = make_msix(Path(tmp) / "corrupt.msix")
+            contents = bytearray(path.read_bytes())
+            offset = contents.find(b"payload")
+            self.assertGreaterEqual(offset, 0)
+            contents[offset] ^= 1
+            path.write_bytes(contents)
+            with self.assertRaises(HoldError):
+                inspect_package(path)
+
 
 
 class IdentityEvidenceTests(unittest.TestCase):
@@ -198,6 +214,12 @@ class IdentityEvidenceTests(unittest.TestCase):
         contract = windows_all_auto_record(Job.validate(job(), config()), evidence())
         self.assertEqual(contract["expected_head_sha"], SHA)
         self.assertTrue(contract["operator_verified"])
+        self.assertEqual(contract["request_id"], "req-0001")
+        self.assertEqual(contract["product_type"], "GAME")
+        self.assertEqual(contract["source_factory"], "AI-Game-Factory")
+        self.assertEqual(contract["source_repository"], config().source_repository)
+        self.assertEqual(contract["source_branch"], config().source_branch)
+        self.assertEqual(contract["source_sha"], SHA)
 
 
 class GitHubReturnTests(unittest.TestCase):
@@ -222,6 +244,57 @@ class GitHubReturnTests(unittest.TestCase):
         result = GitHubReturnClient(self.api).return_identity(Job.validate(job(), config()), config(), evidence(), True)
         self.assertEqual(result["status"], "APPLIED")
         self.assertEqual(result["commit_sha"], "b" * 40)
+    def test_existing_identity_reuse_requires_verified_provenance(self):
+        official = evidence()
+        approved = {
+            "reviewed": True, "source": "partner_center",
+            **{k: official[k] for k in ("store_id", "name", "publisher", "version")},
+            "verified_by": official["authenticated_account"],
+            "evidence_url": official["official_evidence_url"],
+        }
+        def wrapped(obj):
+            return {"encoding": "base64", "content": base64.b64encode(
+                json.dumps(obj).encode("utf-8")).decode("ascii")}
+        self.assertTrue(GitHubReturnClient._existing_matches(wrapped(approved), official))
+        for changes in ({"reviewed": 1}, {"reviewed": False}, {"source": "unverified"},
+                        {"verified_by": "wrong-user"}, {"evidence_url": "https://evil.invalid"},
+                        {"store_id": "9N0000000000"}):
+            with self.subTest(changes=changes):
+                self.assertFalse(GitHubReturnClient._existing_matches(
+                    wrapped({**approved, **changes}), official))
+        for missing in approved:
+            with self.subTest(missing=missing):
+                self.assertFalse(GitHubReturnClient._existing_matches(
+                    wrapped({k: v for k, v in approved.items() if k != missing}), official))
+        self.assertFalse(GitHubReturnClient._existing_matches(wrapped([]), official))
+
+    def test_existing_identity_reports_branch_commit_not_blob_sha(self):
+        official = evidence()
+        approved = {
+            "reviewed": True, "source": "partner_center",
+            **{k: official[k] for k in ("store_id", "name", "publisher", "version")},
+            "verified_by": official["authenticated_account"],
+            "evidence_url": official["official_evidence_url"],
+        }
+        def fake_api(endpoint, body=None, allow_missing=False):
+            if "git/ref/heads/" in endpoint:
+                return {"object": {"sha": SHA}}
+            if "/manifest.json" in endpoint:
+                raw = json.dumps({"slug": "sample-product", "kind": "game"}).encode()
+                return {"encoding": "base64", "content": base64.b64encode(raw).decode()}
+            if "/proposals/" in endpoint:
+                raw = json.dumps({"slug": "sample-product", "title": "Sample Product"}).encode()
+                return {"encoding": "base64", "content": base64.b64encode(raw).decode()}
+            if "/approved-identity.json" in endpoint:
+                return {"sha": "b" * 40, **{"encoding": "base64",
+                        "content": base64.b64encode(json.dumps(approved).encode()).decode()}}
+            raise AssertionError("unexpected API write or read: " + endpoint)
+        result = GitHubReturnClient(fake_api).return_identity(
+            Job.validate(job(), config()), config(), official, True)
+        self.assertEqual(result["status"], "EXISTING_VERIFIED")
+        self.assertEqual(result["commit_sha"], SHA)
+        self.assertNotEqual(result["commit_sha"], "b" * 40)
+
     def test_no_apply_is_side_effect_free(self):
         def forbidden(*_a, **_k):
             raise AssertionError("API must not be called")
@@ -332,6 +405,65 @@ class OrchestratorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             result = self.runner(tmp, builder=FakeBuilder(artifact_kind="exe")).run(job(), apply=True)
         self.assertEqual(result["status"], "HOLD")
+
+    def test_exe_identity_return_rejects_invalid_pe_before_partner_lookup(self):
+        class InvalidExeBuilder(FakeBuilder):
+            def build(self, *args):
+                path = super().build(*args)
+                path.write_bytes(b"not a Windows executable")
+                return path
+        with tempfile.TemporaryDirectory() as tmp:
+            identity, github = FakeIdentity(), FakeGitHub()
+            result = self.runner(
+                tmp, builder=InvalidExeBuilder(artifact_kind="exe"),
+                identity=identity, github=github).run(job(), apply=True)
+        self.assertEqual(result["status"], "HOLD")
+        self.assertEqual((identity.calls, github.calls), (0, 0))
+        self.assertEqual(result["next_stage"], "RESOLVE_HOLD")
+
+    def test_exe_stage_returns_official_identity_without_claiming_msix(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            github = FakeGitHub()
+            result = self.runner(
+                tmp, builder=FakeBuilder(artifact_kind="exe"), github=github
+            ).run(job(), apply=True)
+        self.assertEqual(result["status"], "HOLD")
+        self.assertEqual(result["package"]["kind"], "exe")
+        self.assertRegex(result["package"]["sha256"], r"^[0-9a-f]{64}$")
+        self.assertEqual(result["official_identity"]["status"], "VERIFIED_OPERATOR_EXPORT")
+        self.assertEqual(result["github_return"]["status"], "APPLIED")
+        self.assertEqual(result["next_stage"], "GITHUB_REBUILD_MSIX")
+        self.assertIsNone(result["windows_all_auto_record"])
+        self.assertEqual(github.calls, 1)
+
+    def test_exe_missing_official_evidence_preserves_real_build_proof(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            github = FakeGitHub()
+            result = self.runner(
+                tmp, builder=FakeBuilder(artifact_kind="exe"),
+                identity=FakeIdentity(error=HoldError("Partner Center unavailable")),
+                github=github,
+            ).run(job(), apply=True)
+        self.assertEqual(result["status"], "HOLD")
+        self.assertEqual(result["package"]["kind"], "exe")
+        self.assertRegex(result["package"]["sha256"], r"^[0-9a-f]{64}$")
+        self.assertEqual(result["next_stage"], "OBTAIN_AUTHENTICATED_OFFICIAL_IDENTITY")
+        self.assertEqual(github.calls, 0)
+
+    def test_exe_identity_return_replay_never_rebuilds_or_reapplies(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            builder, github = FakeBuilder(artifact_kind="exe"), FakeGitHub()
+            runner = self.runner(tmp, builder=builder, github=github)
+            first = runner.run(job(), apply=True)
+            replay = runner.run(job(), apply=True)
+            collision = runner.run(job(source_sha="b" * 40), apply=True)
+        self.assertEqual(first["status"], "HOLD")
+        self.assertEqual(first["github_return"]["status"], "APPLIED")
+        self.assertTrue(replay["idempotent_replay"])
+        self.assertEqual(replay["next_stage"], "GITHUB_REBUILD_MSIX")
+        self.assertEqual(collision["status"], "CONFLICT")
+        self.assertEqual((builder.calls, github.calls), (1, 1))
+
     def test_type_state_is_namespaced(self):
         with tempfile.TemporaryDirectory() as tmp:
             runner = self.runner(tmp)
@@ -370,6 +502,34 @@ class FailureClassificationTests(unittest.TestCase):
             GitHubReturnClient._gh_api("graphql")
     def test_secret_redaction(self):
         self.assertNotIn("supersecret", redact("Authorization: bearer supersecret"))
+    def test_signal_sprint_builder_selects_real_game_not_newer_decoy(self):
+        class StubBuilder(PackageBuilder):
+            def _build_windows(self, source):
+                output = source / "dist" / "game"
+                output.mkdir(parents=True)
+                (output / "SignalSprint.exe").write_bytes(b"MZ" + b"game" * 100)
+                (output / "Helper.exe").write_bytes(b"MZ" + b"decoy" * 100)
+                os.utime(output / "Helper.exe", (2_000_000_000, 2_000_000_000))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            built = StubBuilder().build(
+                Job.validate(job(slug="signal-sprint"), config()),
+                root, root / "out", config())
+            self.assertEqual(built.name, "SignalSprint.exe")
+
+    def test_signal_sprint_builder_rejects_missing_expected_executable(self):
+        class WrongBuilder(PackageBuilder):
+            def _build_windows(self, source):
+                output = source / "dist" / "game"
+                output.mkdir(parents=True)
+                (output / "Helper.exe").write_bytes(b"MZ" + b"decoy" * 100)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self.assertRaisesRegex(HoldError, "fresh pinned executable"):
+                WrongBuilder().build(
+                    Job.validate(job(slug="signal-sprint"), config()),
+                    root, root / "out", config())
+
     def test_live_builder_rejects_unknown_entrypoint(self):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(HoldError):
