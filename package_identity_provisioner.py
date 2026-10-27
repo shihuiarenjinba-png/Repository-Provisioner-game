@@ -985,6 +985,19 @@ def write_json(path: Path, value: dict[str, Any]) -> None:
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def _startup_error_response(status: str, errors: list[str], started: str,
+                            next_stage: str) -> dict[str, Any]:
+    """Keep CLI startup failures valid for the machine-readable result contract."""
+    return {"schema_version": SCHEMA_VERSION, "request_id": None, "product_type": None,
+            "source_factory": None, "source_repository": None, "source_branch": None,
+            "source_sha": None, "slug": None, "status": status,
+            "package": {"status": "NOT_BUILT", "sha256": None},
+            "official_identity": {"status": "UNVERIFIED", "store_id": None},
+            "github_return": {"status": "NOT_APPLIED", "commit_sha": None},
+            "windows_all_auto_record": None, "errors": errors, "next_stage": next_stage,
+            "started_at": started, "finished_at": utc_now(), "idempotent_replay": False}
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build/inspect a pinned Factory product and return verified Store Identity")
     parser.add_argument("--input", required=True, type=Path)
@@ -1005,12 +1018,10 @@ def main(argv: list[str] | None = None) -> int:
                              identity=OfficialIdentityProvider(args.official_identity),
                              resume_result=args.resume_result).run(raw, apply=args.apply)
     except ProvisionerError as exc:
-        result = {"schema_version": SCHEMA_VERSION, "request_id": None, "product_type": None,
-                  "status": exc.status, "errors": [redact(str(exc))], "started_at": started, "finished_at": utc_now()}
+        result = _startup_error_response(exc.status, [redact(str(exc))], started, exc.next_stage)
     except Exception as exc:
-        result = {"schema_version": SCHEMA_VERSION, "request_id": None, "product_type": None,
-                  "status": "FAILED", "errors": [f"Startup failure: {type(exc).__name__}"],
-                  "started_at": started, "finished_at": utc_now()}
+        result = _startup_error_response("FAILED", [f"Startup failure: {type(exc).__name__}"],
+                                         started, "FIX_INPUT_OR_IMPLEMENTATION")
     write_json(args.output, result)
     print(json.dumps({"request_id": result.get("request_id"), "status": result["status"], "output": str(args.output)}, ensure_ascii=False))
     return 0 if result["status"] in {"COMPLETED", "DRY_RUN"} else 2
