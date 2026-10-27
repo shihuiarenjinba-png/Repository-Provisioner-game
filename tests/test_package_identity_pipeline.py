@@ -356,6 +356,23 @@ class GitHubReturnTests(unittest.TestCase):
             Job.validate(job(), config()), config(), evidence(), package_result(), True)
         self.assertEqual(result["status"], "APPLIED")
         self.assertEqual(result["commit_sha"], "b" * 40)
+    def test_atomic_identity_return_preserves_slug_in_approved_payload(self):
+        submitted = []
+        def capture(endpoint, body=None, allow_missing=False):
+            if endpoint == "graphql":
+                submitted.append(body)
+            return self.api(endpoint, body, allow_missing)
+        selected_job = Job.validate(job(), config())
+        result = GitHubReturnClient(capture).return_identity(
+            selected_job, config(), evidence(), package_result(), True)
+        self.assertEqual(result["status"], "APPLIED")
+        self.assertEqual(len(submitted), 1)
+        encoded = submitted[0]["variables"]["input"]["fileChanges"]["additions"][0]["contents"]
+        approved = json.loads(base64.b64decode(encoded, validate=True))
+        self.assertEqual(approved["slug"], selected_job.slug)
+        self.assertEqual(approved["request_id"], selected_job.request_id)
+        self.assertEqual(approved["source_sha"], selected_job.source_sha)
+
     def test_existing_identity_reuse_requires_verified_provenance(self):
         official = evidence()
         selected_job = Job.validate(job(), config())
@@ -365,6 +382,7 @@ class GitHubReturnTests(unittest.TestCase):
             **{k: official[k] for k in ("store_id", "name", "publisher", "version",
                                         "package_family_name", "package_sid")},
             "request_id": selected_job.request_id, "product_type": selected_job.product_type,
+            "slug": selected_job.slug,
             "source_factory": selected_job.source_factory, "source_repository": selected_job.source_repository,
             "source_branch": selected_job.source_branch, "source_sha": selected_job.source_sha,
             "verified_source_sha": selected_job.source_sha, "package_sha256": package["sha256"],
@@ -378,7 +396,7 @@ class GitHubReturnTests(unittest.TestCase):
         self.assertTrue(GitHubReturnClient._existing_matches(wrapped(approved), official, selected_job, package))
         for changes in ({"reviewed": 1}, {"reviewed": False}, {"source": "unverified"},
                         {"verified_by": "wrong-user"}, {"evidence_url": "https://evil.invalid"},
-                        {"store_id": "9N0000000000"}):
+                        {"store_id": "9N0000000000"}, {"slug": "another-game"}):
             with self.subTest(changes=changes):
                 self.assertFalse(GitHubReturnClient._existing_matches(
                     wrapped({**approved, **changes}), official, selected_job, package))
@@ -397,6 +415,7 @@ class GitHubReturnTests(unittest.TestCase):
             **{k: official[k] for k in ("store_id", "name", "publisher", "version",
                                         "package_family_name", "package_sid")},
             "request_id": selected_job.request_id, "product_type": selected_job.product_type,
+            "slug": selected_job.slug,
             "source_factory": selected_job.source_factory, "source_repository": selected_job.source_repository,
             "source_branch": selected_job.source_branch, "source_sha": selected_job.source_sha,
             "verified_source_sha": selected_job.source_sha, "package_sha256": package["sha256"],

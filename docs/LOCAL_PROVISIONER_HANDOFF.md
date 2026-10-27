@@ -195,3 +195,13 @@ This is a **review-only code checkpoint**. The active GAME product is still Sign
 - Expected pre-Identity result: `HOLD / OBTAIN_AUTHENTICATED_OFFICIAL_IDENTITY`, `github_return=NOT_APPLIED`, `windows_all_auto_record=null`. After authenticated evidence and explicit approval, exact source branch CAS return should produce a real Git **commit** SHA and `HOLD / GITHUB_REBUILD_MSIX`; this is not GAME E2E PASS.
 - After CAS: preserve the original immutable `source_sha`; distinguish `factory_head_sha` for the MSIX build. Validate real MSIX SHA/CRC/manifest executable, handoff correlation, Windows-all-auto `type=game` receipt, local QA, and Checker GUI/install evidence. No Store submission, merge, force push or main/release changes.
 - Verification: previous PR #8 CI run `40459705194` passed; the two new commits require fresh CI confirmation before being called PASS.
+
+## 2026-10-27 — GAME approved Identity slug correlation hardening
+
+- Active product: `signal-sprint`; phase: `LOCAL_EXE_INSPECTED__PARTNER_CENTER_IDENTITY_HOLD`; new_product_allowed: `false`.
+- Request: `game-signal-sprint-c058cbf7fe38e02d929c67d047d717ff74bd522e`; immutable source: `AI-Game-Factory/codex/game-signal-sprint-undo-20261027` @ `c058cbf7fe38e02d929c67d047d717ff74bd522e`.
+- Last completed product step: pinned real Windows EXE rebuilt and inspected. Code checkpoint: approved-identity.json now carries the original `slug`; verified existing Identity reuse refuses absent/mismatched `slug`. Regression covers the CAS payload and a changed-slug collision.
+- Resume: `shihuiarenjinba-png/Repository-Provisioner-game` / `codex/game-msix-package-safety-20261027-1510` (use current GitHub HEAD and CI, never a stale SHA).
+- Next action: authenticated Partner Center official Identity on local Windows only; use reviewed Windows-all-auto PR #16 check-only worker with this Provisioner safety branch; recheck fixed Factory HEAD immediately before explicit approved CAS return. On success, use dedicated Factory build/integration branch for safety PR #7 and handoff PR #11; do not modify the fixed source branch before CAS.
+- Blocked by: official Identity evidence and human/local CAS approval. No real MSIX, Windows-all-auto GAME receipt or GUI/Checker QA. CI and E2E PASS are separate; this commit is code/test preparation only.
+- No main/release writes, merges, force pushes, Store submission, or second product.

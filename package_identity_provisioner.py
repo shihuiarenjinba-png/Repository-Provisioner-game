@@ -633,6 +633,7 @@ class GitHubReturnClient:
             raise ConflictError("approved-identity.json already exists and will not be overwritten")
         approved = {"schema_version": SCHEMA_VERSION, "reviewed": True, "source": "partner_center",
                     "request_id": job.request_id, "product_type": job.product_type,
+                    "slug": job.slug,
                     "source_factory": job.source_factory, "source_repository": job.source_repository,
                     "source_branch": job.source_branch, "source_sha": job.source_sha,
                     "verified_source_sha": job.source_sha, "package_sha256": package["sha256"],
@@ -711,6 +712,7 @@ class GitHubReturnClient:
             "evidence_url": official["official_evidence_url"],
             "request_id": job.request_id,
             "product_type": job.product_type,
+            "slug": job.slug,
             "source_factory": job.source_factory,
             "source_repository": job.source_repository,
             "source_branch": job.source_branch,
