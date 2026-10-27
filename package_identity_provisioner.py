@@ -447,8 +447,10 @@ def verify_game_windows_exe(path: Path) -> None:
 
 
 def inspect_package(path: Path) -> dict[str, Any]:
-    if not path.is_file():
-        raise HoldError("Package artifact does not exist")
+    if path.is_symlink() or not path.is_file():
+        raise HoldError("Package artifact is missing or symlinked")
+    if not 0 < path.stat().st_size <= 300 * 1024 * 1024:
+        raise HoldError("Package artifact is empty or exceeds local QA size limit")
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
@@ -464,18 +466,49 @@ def inspect_package(path: Path) -> dict[str, Any]:
     try:
         with zipfile.ZipFile(path) as archive:
             members = archive.infolist()
-            # Never accept a package whose manifest is intact but its EXE or
-            # another payload has a corrupt CRC. Bound decompression first.
-            if (not members or len(members) > 2000 or
-                    sum(member.file_size for member in members) > 300 * 1024 * 1024):
+            if not 1 <= len(members) <= 2000:
                 raise HoldError("MSIX has excessive or missing ZIP payload")
+            seen: set[str] = set()
+            total_size = 0
+            has_executable = False
+            for member in members:
+                name = member.filename
+                # Windows resolves case-insensitively. Never let an ambiguous,
+                # traversing, linked or decompression-bomb member reach QA.
+                if (not name or "\\" in name or name.startswith("/") or
+                        ":" in name.split("/")[0] or
+                        any(part in {"", ".", ".."} for part in name.rstrip("/").split("/"))):
+                    raise HoldError("MSIX contains an unsafe ZIP member path")
+                key = name.casefold()
+                if key in seen:
+                    raise HoldError("MSIX contains duplicate case-insensitive ZIP members")
+                seen.add(key)
+                if (member.create_system == 3 and
+                        (member.external_attr >> 16) & 0o170000 == 0o120000):
+                    raise HoldError("MSIX contains a ZIP symlink")
+                total_size += member.file_size
+                if (member.file_size > 300 * 1024 * 1024 or
+                        total_size > 300 * 1024 * 1024 or
+                        (member.file_size > 0 and member.compress_size == 0) or
+                        (member.compress_size and member.file_size > 100 * member.compress_size)):
+                    raise HoldError("MSIX ZIP payload exceeds safe decompression limits")
+                if not member.is_dir() and name.lower().endswith(".exe"):
+                    has_executable = True
+            required = {"appxmanifest.xml": "Package",
+                        "appxblockmap.xml": "BlockMap",
+                        "[content_types].xml": "Types"}
+            for filename, expected_root in required.items():
+                member = next((m for m in members if m.filename.casefold() == filename), None)
+                if member is None or not 0 < member.file_size <= 2 * 1024 * 1024:
+                    raise HoldError("MSIX required package metadata missing or oversized: " + filename)
+                document = ET.fromstring(archive.read(member))
+                if document.tag.rsplit("}", 1)[-1] != expected_root:
+                    raise HoldError("MSIX package metadata has invalid XML root: " + filename)
+                if filename == "appxmanifest.xml":
+                    root = document
+            # Verify the CRC of *every* payload, not just metadata or the EXE.
             if archive.testzip() is not None:
                 raise HoldError("MSIX contains a CRC-corrupted payload")
-            manifest_name = next((n for n in archive.namelist() if n.lower() == "appxmanifest.xml"), None)
-            if manifest_name is None:
-                raise HoldError("MSIX is missing AppxManifest.xml")
-            raw = archive.read(manifest_name)
-        root = ET.fromstring(raw)
         identity = next((element for element in root.iter() if element.tag.rsplit("}", 1)[-1] == "Identity"), None)
         if identity is None:
             raise HoldError("MSIX manifest has no Identity element")
@@ -484,12 +517,11 @@ def inspect_package(path: Path) -> dict[str, Any]:
             raise HoldError("MSIX Identity is incomplete")
         family = _package_family_name(name, publisher)
         result.update(package_identity=name, publisher=publisher, version=version,
-                      package_family_name=family,
+                      package_family_name=family, has_executable=has_executable,
                       package_sid=_windows_package_sid(family) if family else None)
         return result
-    except (zipfile.BadZipFile, ET.ParseError, KeyError) as exc:
-        raise HoldError(f"Invalid MSIX package: {exc}") from exc
-
+    except (zipfile.BadZipFile, ET.ParseError, KeyError, RuntimeError, EOFError, OSError) as exc:
+        raise HoldError(f"Invalid MSIX package: {type(exc).__name__}") from exc
 
 class OfficialIdentityProvider:
     """Read an operator export from a separately authenticated Partner Center session."""
@@ -758,6 +790,9 @@ class Provisioner:
                     root = self.work_dir / hashlib.sha256(job.request_id.encode()).hexdigest()[:16]
                     source_dir = self.source.acquire(job, root / "source")
                     package = inspect_package(self.builder.build(job, source_dir, root / "artifacts", self.config))
+                    if (self.config.product_type == "GAME" and package["kind"] in {"msix", "appx"}
+                            and not package.get("has_executable")):
+                        raise HoldError("GAME MSIX contains no executable payload")
                     # Signal Sprint currently produces a real unsigned EXE.
                     # The official Identity must be returned BEFORE the Factory
                     # can create an MSIX. Preserve the EXE SHA as a HOLD stage,
