@@ -82,7 +82,11 @@ class FakeBuilder:
         path = output_dir / ("candidate.msix" if self.artifact_kind == "msix" else "candidate.exe")
         if self.artifact_kind == "msix":
             return make_msix(path, name=self.name)
-        path.write_bytes(b"MZ-not-a-real-binary")
+        pe = bytearray(100_100)
+        pe[:2] = b"MZ"
+        pe[0x3c:0x40] = (0x80).to_bytes(4, "little")
+        pe[0x80:0x84] = b"PE\x00\x00"
+        path.write_bytes(pe)
         return path
 
 
@@ -383,6 +387,21 @@ class OrchestratorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             result = self.runner(tmp, builder=FakeBuilder(artifact_kind="exe")).run(job(), apply=True)
         self.assertEqual(result["status"], "HOLD")
+
+    def test_exe_identity_return_rejects_invalid_pe_before_partner_lookup(self):
+        class InvalidExeBuilder(FakeBuilder):
+            def build(self, *args):
+                path = super().build(*args)
+                path.write_bytes(b"not a Windows executable")
+                return path
+        with tempfile.TemporaryDirectory() as tmp:
+            identity, github = FakeIdentity(), FakeGitHub()
+            result = self.runner(
+                tmp, builder=InvalidExeBuilder(artifact_kind="exe"),
+                identity=identity, github=github).run(job(), apply=True)
+        self.assertEqual(result["status"], "HOLD")
+        self.assertEqual((identity.calls, github.calls), (0, 0))
+        self.assertEqual(result["next_stage"], "RESOLVE_HOLD")
 
     def test_exe_stage_returns_official_identity_without_claiming_msix(self):
         with tempfile.TemporaryDirectory() as tmp:
