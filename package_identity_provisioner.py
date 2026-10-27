@@ -548,6 +548,15 @@ class GitHubReturnClient:
             expected_kind = "app" if config.product_type == "APP" else "game"
             if not isinstance(manifest, dict) or manifest.get("slug") != job.slug or manifest.get("kind") != expected_kind:
                 raise ConflictError("Factory product manifest slug/kind mismatch")
+            if config.product_type == "GAME":
+                proposal_item = self.api(base + f"contents/proposals/{job.slug}.json?ref=" + branch)
+                try:
+                    proposal = json.loads(self._decode_content(proposal_item, 16_000))
+                except json.JSONDecodeError as exc:
+                    raise ConflictError("Factory GAME proposal is invalid JSON") from exc
+                if (not isinstance(proposal, dict) or proposal.get("slug") != job.slug
+                        or proposal.get("title") != job.display_name):
+                    raise ConflictError("Factory GAME product slug/display_name mismatch")
 
     @staticmethod
     def _decode_content(item: Any, limit: int) -> bytes:
