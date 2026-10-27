@@ -171,6 +171,18 @@ class PackageInspectionTests(unittest.TestCase):
             path.write_bytes(b"not zip")
             with self.assertRaises(HoldError):
                 inspect_package(path)
+    def test_msix_with_corrupt_non_manifest_payload_is_hold(self):
+        # The manifest is still valid: CRC checking must cover every payload.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = make_msix(Path(tmp) / "corrupt.msix")
+            contents = bytearray(path.read_bytes())
+            offset = contents.find(b"payload")
+            self.assertGreaterEqual(offset, 0)
+            contents[offset] ^= 1
+            path.write_bytes(contents)
+            with self.assertRaises(HoldError):
+                inspect_package(path)
+
 
 
 class IdentityEvidenceTests(unittest.TestCase):
@@ -202,6 +214,12 @@ class IdentityEvidenceTests(unittest.TestCase):
         contract = windows_all_auto_record(Job.validate(job(), config()), evidence())
         self.assertEqual(contract["expected_head_sha"], SHA)
         self.assertTrue(contract["operator_verified"])
+        self.assertEqual(contract["request_id"], "req-0001")
+        self.assertEqual(contract["product_type"], "GAME")
+        self.assertEqual(contract["source_factory"], "AI-Game-Factory")
+        self.assertEqual(contract["source_repository"], config().source_repository)
+        self.assertEqual(contract["source_branch"], config().source_branch)
+        self.assertEqual(contract["source_sha"], SHA)
 
 
 class GitHubReturnTests(unittest.TestCase):
