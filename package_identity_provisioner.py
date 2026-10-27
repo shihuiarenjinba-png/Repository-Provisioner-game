@@ -11,7 +11,7 @@ import base64
 import ctypes
 from ctypes import wintypes
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
@@ -573,6 +573,17 @@ class OfficialIdentityProvider:
             raise ConflictError("Official identity evidence belongs to another product/request/SHA")
         if not isinstance(raw["authenticated_account"], str) or not 3 <= len(raw["authenticated_account"]) <= 100:
             raise HoldError("Authenticated Partner Center account identifier is missing")
+        verified_at = raw["verified_at"]
+        if (not isinstance(verified_at, str) or not re.fullmatch(
+                r"\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,6})?(?:Z|[+-]\\d{2}:\\d{2})",
+                verified_at)):
+            raise HoldError("Official Identity verification timestamp must be RFC3339 with timezone")
+        try:
+            verified_time = datetime.fromisoformat(verified_at.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise HoldError("Invalid official Identity verification timestamp") from exc
+        if verified_time.astimezone(timezone.utc) > datetime.now(timezone.utc) + timedelta(minutes=5):
+            raise HoldError("Official Identity verification timestamp is in the future")
         url = urlparse(str(raw["official_evidence_url"]))
         if url.scheme != "https" or url.hostname not in {"partner.microsoft.com", "partnercenter.microsoft.com"} or url.username or url.password or url.fragment:
             raise HoldError("Official evidence URL is not a trusted Partner Center URL")
