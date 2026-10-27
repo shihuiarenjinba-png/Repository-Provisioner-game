@@ -573,7 +573,7 @@ class OrchestratorTests(unittest.TestCase):
     def test_resume_result_rejects_nonabsolute_or_nonstr_path_before_build(self):
         # A scheduler must not reinterpret a relative path in its own cwd,
         # or coerce a malformed path to a string, when resuming pinned bytes.
-        for bad_path in ("SignalSprint.exe", 42, [], None, "bad\\x00path.exe"):
+        for bad_path in ("SignalSprint.exe", 42, [], None, "bad\x00path.exe"):
             with self.subTest(path=repr(bad_path)), tempfile.TemporaryDirectory() as tmp:
                 resume, _ = self.resume_fixture(tmp)
                 previous = json.loads(resume.read_text(encoding="utf-8"))
