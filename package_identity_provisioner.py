@@ -828,7 +828,7 @@ class Provisioner:
             raise ConflictError("Resume result has no verified GAME EXE")
         raw_path = previous.get("path")
         if (not isinstance(raw_path, str) or not raw_path
-                or "\\0" in raw_path or not Path(raw_path).is_absolute()):
+                or "\x00" in raw_path or not Path(raw_path).is_absolute()):
             raise ConflictError("Resume result must pin an absolute local EXE path")
         path = Path(raw_path)
         inspected = inspect_package(path)
