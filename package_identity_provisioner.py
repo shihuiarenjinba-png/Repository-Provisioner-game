@@ -575,7 +575,7 @@ class OfficialIdentityProvider:
             raise HoldError("Authenticated Partner Center account identifier is missing")
         verified_at = raw["verified_at"]
         if (not isinstance(verified_at, str) or not re.fullmatch(
-                r"\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,6})?(?:Z|[+-]\\d{2}:\\d{2})",
+                r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})",
                 verified_at)):
             raise HoldError("Official Identity verification timestamp must be RFC3339 with timezone")
         try:
