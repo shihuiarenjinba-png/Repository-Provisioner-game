@@ -453,6 +453,14 @@ def inspect_package(path: Path) -> dict[str, Any]:
         return result
     try:
         with zipfile.ZipFile(path) as archive:
+            members = archive.infolist()
+            # Never accept a package whose manifest is intact but its EXE or
+            # another payload has a corrupt CRC. Bound decompression first.
+            if (not members or len(members) > 2000 or
+                    sum(member.file_size for member in members) > 300 * 1024 * 1024):
+                raise HoldError("MSIX has excessive or missing ZIP payload")
+            if archive.testzip() is not None:
+                raise HoldError("MSIX contains a CRC-corrupted payload")
             manifest_name = next((n for n in archive.namelist() if n.lower() == "appxmanifest.xml"), None)
             if manifest_name is None:
                 raise HoldError("MSIX is missing AppxManifest.xml")
@@ -516,6 +524,9 @@ def compare_package_identity(package: dict[str, Any], official: dict[str, Any]) 
 
 def windows_all_auto_record(job: Job, official: dict[str, Any]) -> dict[str, Any]:
     return {"schema_version": 1, "type": {"APP": "app", "GAME": "game", "GAME_3D": "3d-game"}[job.product_type],
+            "request_id": job.request_id, "product_type": job.product_type,
+            "source_factory": job.source_factory, "source_repository": job.source_repository,
+            "source_branch": job.source_branch, "source_sha": job.source_sha,
             "slug": job.slug, "expected_head_sha": job.source_sha,
             "official_evidence_url": official["official_evidence_url"], "operator_verified": True,
             "verified_by": official["authenticated_account"],
@@ -761,7 +772,8 @@ class Provisioner:
 
     def _base_response(self, job: Job, status: str, started: str) -> dict[str, Any]:
         return {"schema_version": SCHEMA_VERSION, "request_id": job.request_id, "product_type": job.product_type,
-                "status": status, "source_repository": job.source_repository, "source_branch": job.source_branch,
+                "status": status, "source_factory": job.source_factory,
+                "source_repository": job.source_repository, "source_branch": job.source_branch,
                 "source_sha": job.source_sha, "slug": job.slug, "started_at": started, "finished_at": utc_now(),
                 "idempotent_replay": False,
                 "package": {"status": "NOT_BUILT", "sha256": None, "path": None, "package_identity": None,
