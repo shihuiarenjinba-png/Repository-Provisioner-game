@@ -570,6 +570,24 @@ class OrchestratorTests(unittest.TestCase):
                 self.assertEqual(source.calls, 0)
                 self.assertEqual(builder.calls, 0)
 
+    def test_resume_result_rejects_nonabsolute_or_nonstr_path_before_build(self):
+        # A scheduler must not reinterpret a relative path in its own cwd,
+        # or coerce a malformed path to a string, when resuming pinned bytes.
+        for bad_path in ("SignalSprint.exe", 42, [], None, "bad\\x00path.exe"):
+            with self.subTest(path=repr(bad_path)), tempfile.TemporaryDirectory() as tmp:
+                resume, _ = self.resume_fixture(tmp)
+                previous = json.loads(resume.read_text(encoding="utf-8"))
+                previous["package"]["path"] = bad_path
+                resume.write_text(json.dumps(previous), encoding="utf-8")
+                source, builder, github = FakeSource(), FakeBuilder(artifact_kind="exe"), FakeGitHub()
+                runner = Provisioner(config(), Path(tmp) / "state", Path(tmp) / "work",
+                                     source=source, builder=builder, identity=FakeIdentity(),
+                                     github=github, resume_result=resume)
+                result = runner.run(job(), apply=True)
+                self.assertEqual(result["status"], "CONFLICT")
+                self.assertEqual(result["next_stage"], "RECONCILE_CONFLICT")
+                self.assertEqual((source.calls, builder.calls, github.calls), (0, 0, 0))
+
     def test_resume_result_can_reach_existing_github_cas_client(self):
         with tempfile.TemporaryDirectory() as tmp:
             resume, package = self.resume_fixture(tmp)
