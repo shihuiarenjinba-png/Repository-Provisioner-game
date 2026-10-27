@@ -63,14 +63,20 @@ def package_result(**updates):
     return value
 
 
-def make_msix(path: Path, name="Sample.Product", publisher="CN=Test Publisher", version="1.2.3.4"):
+def make_msix(path: Path, name="Sample.Product", publisher="CN=Test Publisher", version="1.2.3.4",
+              include_exe=True):
     manifest = f'''<?xml version="1.0" encoding="utf-8"?>
     <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">
       <Identity Name="{name}" Publisher="{publisher}" Version="{version}" />
+      <Applications><Application Id="Game" Executable="bin/Sample.exe" EntryPoint="Windows.FullTrustApplication" /></Applications>
     </Package>'''
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("AppxManifest.xml", manifest)
+        archive.writestr("AppxBlockMap.xml", '<BlockMap xmlns="http://schemas.microsoft.com/appx/2010/blockmap"/>')
+        archive.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>')
         archive.writestr("payload.txt", "payload")
+        if include_exe:
+            archive.writestr("bin/Sample.exe", b"MZ" + b"test executable")
     return path
 
 
@@ -187,6 +193,92 @@ class PackageInspectionTests(unittest.TestCase):
             path.write_bytes(b"not zip")
             with self.assertRaises(HoldError):
                 inspect_package(path)
+    def test_msix_requires_package_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "missing-blockmap.msix"
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr("AppxManifest.xml", '<Package><Identity Name="X" Publisher="CN=X" Version="1.0.0.0"/></Package>')
+                archive.writestr("Sample.exe", b"MZ")
+            with self.assertRaisesRegex(HoldError, "required package metadata"):
+                inspect_package(path)
+
+    def test_msix_rejects_traversal_member(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = make_msix(Path(tmp) / "traversal.msix")
+            with zipfile.ZipFile(path, "a") as archive:
+                archive.writestr("../outside.exe", b"MZ")
+            with self.assertRaisesRegex(HoldError, "unsafe ZIP member"):
+                inspect_package(path)
+
+    def test_msix_rejects_duplicate_case_insensitive_members(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = make_msix(Path(tmp) / "duplicate.msix")
+            with zipfile.ZipFile(path, "a") as archive:
+                archive.writestr("APPXMANIFEST.XML", b"<Package/>")
+            with self.assertRaisesRegex(HoldError, "duplicate case-insensitive"):
+                inspect_package(path)
+
+    def test_msix_rejects_zip_symlink(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = make_msix(Path(tmp) / "linked.msix")
+            entry = zipfile.ZipInfo("linked.exe")
+            entry.create_system = 3
+            entry.external_attr = (0o120777 << 16)
+            with zipfile.ZipFile(path, "a") as archive:
+                archive.writestr(entry, b"target.exe")
+            with self.assertRaisesRegex(HoldError, "ZIP symlink"):
+                inspect_package(path)
+
+    def test_msix_reports_executable_payload(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            present = inspect_package(make_msix(Path(tmp) / "present.msix"))
+            absent = inspect_package(make_msix(Path(tmp) / "absent.msix", include_exe=False))
+        self.assertTrue(present["has_executable"])
+        self.assertTrue(present["manifest_executable_present"])
+        self.assertFalse(absent["has_executable"])
+        self.assertFalse(absent["manifest_executable_present"])
+
+    def test_msix_rejects_unbound_helper_executable(self):
+        # A ZIP may contain a helper EXE while the launch target is missing.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = make_msix(Path(tmp) / "orphan.msix")
+            with zipfile.ZipFile(path, "a") as archive:
+                manifest = archive.read("AppxManifest.xml").decode()
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr("AppxManifest.xml", manifest.replace(
+                    'Executable="bin/Sample.exe"', 'Executable="bin/Missing.exe"'))
+                archive.writestr("AppxBlockMap.xml", "<BlockMap/>")
+                archive.writestr("[Content_Types].xml", "<Types/>")
+                archive.writestr("bin/Sample.exe", b"MZhelper")
+            result = inspect_package(path)
+        self.assertTrue(result["has_executable"])
+        self.assertFalse(result["manifest_executable_present"])
+
+    def test_msix_rejects_manifest_executable_traversal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = make_msix(Path(tmp) / "unsafe.msix")
+            with zipfile.ZipFile(path, "r") as archive:
+                manifest = archive.read("AppxManifest.xml").decode()
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr("AppxManifest.xml", manifest.replace(
+                    'Executable="bin/Sample.exe"', 'Executable="../outside.exe"'))
+                archive.writestr("AppxBlockMap.xml", "<BlockMap/>")
+                archive.writestr("[Content_Types].xml", "<Types/>")
+                archive.writestr("bin/Sample.exe", b"MZhelper")
+            with self.assertRaisesRegex(HoldError, "unsafe executable path"):
+                inspect_package(path)
+
+    def test_msix_rejects_wrong_blockmap_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "bad-blockmap.msix"
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr("AppxManifest.xml", '<Package><Identity Name="X" Publisher="CN=X" Version="1.0.0.0"/></Package>')
+                archive.writestr("AppxBlockMap.xml", "<Package/>")
+                archive.writestr("[Content_Types].xml", "<Types/>")
+                archive.writestr("Sample.exe", b"MZ")
+            with self.assertRaisesRegex(HoldError, "invalid XML root"):
+                inspect_package(path)
+
     def test_msix_with_corrupt_non_manifest_payload_is_hold(self):
         # The manifest is still valid: CRC checking must cover every payload.
         with tempfile.TemporaryDirectory() as tmp:
@@ -208,6 +300,24 @@ class IdentityEvidenceTests(unittest.TestCase):
             path.write_text(json.dumps(evidence()), encoding="utf-8")
             result = OfficialIdentityProvider(path).lookup(Job.validate(job(), config()))
         self.assertEqual(result["store_id"], "9N1234567890")
+    def test_official_identity_verification_timestamp_must_be_real_and_not_future(self):
+        for timestamp in (None, "", "not-a-timestamp", "2026-10-26T00:00:00",
+                          "2026-02-30T00:00:00Z", "3026-10-26T00:00:00Z"):
+            with self.subTest(verified_at=timestamp), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "identity.json"
+                path.write_text(json.dumps(evidence(verified_at=timestamp)), encoding="utf-8")
+                with self.assertRaisesRegex(HoldError, "verification timestamp"):
+                    OfficialIdentityProvider(path).lookup(Job.validate(job(), config()))
+
+    def test_duplicate_official_identity_source_sha_is_hold(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "identity.json"
+            # The first SHA conflicts; the second would win under json.loads.
+            duplicate = '{"source_sha":"' + "b" * 40 + '",' + json.dumps(evidence())[1:]
+            path.write_text(duplicate, encoding="utf-8")
+            with self.assertRaisesRegex(HoldError, "Duplicate JSON key"):
+                OfficialIdentityProvider(path).lookup(Job.validate(job(), config()))
+
     def test_untrusted_evidence_url_is_hold(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "identity.json"
@@ -264,6 +374,23 @@ class GitHubReturnTests(unittest.TestCase):
             Job.validate(job(), config()), config(), evidence(), package_result(), True)
         self.assertEqual(result["status"], "APPLIED")
         self.assertEqual(result["commit_sha"], "b" * 40)
+    def test_atomic_identity_return_preserves_slug_in_approved_payload(self):
+        submitted = []
+        def capture(endpoint, body=None, allow_missing=False):
+            if endpoint == "graphql":
+                submitted.append(body)
+            return self.api(endpoint, body, allow_missing)
+        selected_job = Job.validate(job(), config())
+        result = GitHubReturnClient(capture).return_identity(
+            selected_job, config(), evidence(), package_result(), True)
+        self.assertEqual(result["status"], "APPLIED")
+        self.assertEqual(len(submitted), 1)
+        encoded = submitted[0]["variables"]["input"]["fileChanges"]["additions"][0]["contents"]
+        approved = json.loads(base64.b64decode(encoded, validate=True))
+        self.assertEqual(approved["slug"], selected_job.slug)
+        self.assertEqual(approved["request_id"], selected_job.request_id)
+        self.assertEqual(approved["source_sha"], selected_job.source_sha)
+
     def test_existing_identity_reuse_requires_verified_provenance(self):
         official = evidence()
         selected_job = Job.validate(job(), config())
@@ -273,6 +400,7 @@ class GitHubReturnTests(unittest.TestCase):
             **{k: official[k] for k in ("store_id", "name", "publisher", "version",
                                         "package_family_name", "package_sid")},
             "request_id": selected_job.request_id, "product_type": selected_job.product_type,
+            "slug": selected_job.slug,
             "source_factory": selected_job.source_factory, "source_repository": selected_job.source_repository,
             "source_branch": selected_job.source_branch, "source_sha": selected_job.source_sha,
             "verified_source_sha": selected_job.source_sha, "package_sha256": package["sha256"],
@@ -286,7 +414,7 @@ class GitHubReturnTests(unittest.TestCase):
         self.assertTrue(GitHubReturnClient._existing_matches(wrapped(approved), official, selected_job, package))
         for changes in ({"reviewed": 1}, {"reviewed": False}, {"source": "unverified"},
                         {"verified_by": "wrong-user"}, {"evidence_url": "https://evil.invalid"},
-                        {"store_id": "9N0000000000"}):
+                        {"store_id": "9N0000000000"}, {"slug": "another-game"}):
             with self.subTest(changes=changes):
                 self.assertFalse(GitHubReturnClient._existing_matches(
                     wrapped({**approved, **changes}), official, selected_job, package))
@@ -295,6 +423,11 @@ class GitHubReturnTests(unittest.TestCase):
                 self.assertFalse(GitHubReturnClient._existing_matches(
                     wrapped({k: v for k, v in approved.items() if k != missing}), official, selected_job, package))
         self.assertFalse(GitHubReturnClient._existing_matches(wrapped([]), official, selected_job, package))
+        duplicate = '{"source_sha":"' + "b" * 40 + '",' + json.dumps(approved)[1:]
+        duplicate_item = {"encoding": "base64", "content": base64.b64encode(
+            duplicate.encode("utf-8")).decode("ascii")}
+        self.assertFalse(GitHubReturnClient._existing_matches(
+            duplicate_item, official, selected_job, package))
 
     def test_existing_identity_reports_branch_commit_not_blob_sha(self):
         official = evidence()
@@ -305,6 +438,7 @@ class GitHubReturnTests(unittest.TestCase):
             **{k: official[k] for k in ("store_id", "name", "publisher", "version",
                                         "package_family_name", "package_sid")},
             "request_id": selected_job.request_id, "product_type": selected_job.product_type,
+            "slug": selected_job.slug,
             "source_factory": selected_job.source_factory, "source_repository": selected_job.source_repository,
             "source_branch": selected_job.source_branch, "source_sha": selected_job.source_sha,
             "verified_source_sha": selected_job.source_sha, "package_sha256": package["sha256"],
@@ -455,6 +589,19 @@ class OrchestratorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             result = self.runner(tmp, builder=FakeBuilder(name="Other.Product")).run(job(), apply=True)
         self.assertEqual(result["status"], "CONFLICT")
+    def test_game_msix_without_executable_is_hold_before_identity_return(self):
+        class MissingExeBuilder(FakeBuilder):
+            def build(self, _job, _source, output_dir, _config):
+                output_dir.mkdir(parents=True, exist_ok=True)
+                return make_msix(output_dir / "no-executable.msix", include_exe=False)
+        with tempfile.TemporaryDirectory() as tmp:
+            identity, github = FakeIdentity(), FakeGitHub()
+            result = self.runner(tmp, builder=MissingExeBuilder(), identity=identity, github=github).run(
+                job(), apply=True)
+        self.assertEqual(result["status"], "HOLD")
+        self.assertIn("manifest-bound executable payload", result["errors"][0])
+        self.assertEqual((identity.calls, github.calls), (0, 0))
+
     def test_exe_only_build_is_hold(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = self.runner(tmp, builder=FakeBuilder(artifact_kind="exe")).run(job(), apply=True)
@@ -517,6 +664,27 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(replay["next_stage"], "GITHUB_REBUILD_MSIX")
         self.assertEqual(collision["status"], "CONFLICT")
         self.assertEqual((builder.calls, github.calls), (1, 1))
+
+    def test_game_msix_with_orphan_executable_is_hold_before_identity_return(self):
+        class OrphanBuilder(FakeBuilder):
+            def build(self, _job, _source, output_dir, _config):
+                path = super().build(_job, _source, output_dir, _config)
+                with zipfile.ZipFile(path, "r") as archive:
+                    manifest = archive.read("AppxManifest.xml").decode()
+                with zipfile.ZipFile(path, "w") as archive:
+                    archive.writestr("AppxManifest.xml", manifest.replace(
+                        'Executable="bin/Sample.exe"', 'Executable="bin/Missing.exe"'))
+                    archive.writestr("AppxBlockMap.xml", "<BlockMap/>")
+                    archive.writestr("[Content_Types].xml", "<Types/>")
+                    archive.writestr("bin/Sample.exe", b"MZhelper")
+                return path
+        with tempfile.TemporaryDirectory() as tmp:
+            identity, github = FakeIdentity(), FakeGitHub()
+            result = self.runner(tmp, builder=OrphanBuilder(), identity=identity, github=github).run(
+                job(), apply=True)
+        self.assertEqual(result["status"], "HOLD")
+        self.assertIn("manifest-bound executable", result["errors"][0])
+        self.assertEqual((identity.calls, github.calls), (0, 0))
 
     def test_type_state_is_namespaced(self):
         with tempfile.TemporaryDirectory() as tmp:

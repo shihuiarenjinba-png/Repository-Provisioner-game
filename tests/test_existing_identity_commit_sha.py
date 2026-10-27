@@ -41,6 +41,7 @@ class ExistingIdentityCommitTests(unittest.TestCase):
             **{key: official[key] for key in ("store_id", "name", "publisher", "version",
                                               "package_family_name", "package_sid")},
             "request_id": raw["request_id"], "product_type": raw["product_type"],
+            "slug": raw["slug"],
             "source_factory": raw["source_factory"], "source_repository": raw["source_repository"],
             "source_branch": raw["source_branch"], "source_sha": HEAD,
             "verified_source_sha": HEAD, "package_sha256": package["sha256"],
@@ -100,6 +101,7 @@ class ExistingIdentityCommitTests(unittest.TestCase):
             **{key: official[key] for key in ("store_id", "name", "publisher", "version",
                                               "package_family_name", "package_sid")},
             "request_id": checked_job.request_id, "product_type": checked_job.product_type,
+            "slug": checked_job.slug,
             "source_factory": checked_job.source_factory, "source_repository": checked_job.source_repository,
             "source_branch": checked_job.source_branch, "source_sha": HEAD,
             "verified_source_sha": HEAD, "package_sha256": package["sha256"],
@@ -117,7 +119,7 @@ class ExistingIdentityCommitTests(unittest.TestCase):
             {"reviewed": False}, {"reviewed": 1}, {"source": "unknown"},
             {"verified_by": "different-operator"},
             {"evidence_url": "https://partner.microsoft.com/other-product"},
-            {"store_id": "9N0000000000"},
+            {"store_id": "9N0000000000"}, {"slug": "another-game"},
         ):
             with self.subTest(changes=changes):
                 self.assertFalse(GitHubReturnClient._existing_matches(

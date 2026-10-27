@@ -149,3 +149,111 @@ The historical fixed-branch guidance above is superseded for this one active pro
 - **Phase:** `LOCAL_EXE_INSPECTED__PARTNER_CENTER_IDENTITY_HOLD`. Factory unsigned EXE Artifact verification、DRY_RUN、固定SHAのローカル再ビルドとPE/署名/SHA検査まで完了。
 - **Next action:** 認証済みPartner Center証拠を取得し、同一相関キーを再確認後、同じFactory作業ブランチの`products/signal-sprint/store/approved-identity.json`へCAS返却する。commit SHA必須。Factory HEAD変更または同request_idでSHA/slug相違は`CONFLICT`。
 - **Blocked by:** authenticated official Partner Center Identity、Factory safety PR #7とproduct PR #10の安全な統合、real MSIX、Windows-all-auto `type=game` receipt、Windows-checker/GUI QA。unsigned EXEをMSIXまたはE2E PASSとして扱わない。
+
+## 2026-10-27 15:12 JST — Signal Sprint GAME MSIX package-safety checkpoint
+
+- **Active product:** `signal-sprint`; `new_product_allowed=false`. This is a package gate improvement, **not** a new game or a claim of real MSIX delivery.
+- **Source Factory:** `shihuiarenjinba-png/AI-Game-Factory`, `codex/game-signal-sprint-undo-20261027`, immutable `c058cbf7fe38e02d929c67d047d717ff74bd522e`. `request_id=game-signal-sprint-c058cbf7fe38e02d929c67d047d717ff74bd522e`.
+- **Provisioner safety patch:** Draft [PR #8](https://github.com/shihuiarenjinba-png/Repository-Provisioner-game/pull/8), `codex/game-msix-package-safety-20261027-1510`, based on GAME integration [PR #7](https://github.com/shihuiarenjinba-png/Repository-Provisioner-game/pull/7) at `7ac69a43f3b06402a942b7f31ec3070f67c67688`. Patch commits: `c6de7c18a7182c500de7f7c32f0875fcb9c046a6`, `d9c6f5d61eeb2fe11d08d51d1280e317d43f78a6`.
+- **Fixed code paths:** `package_identity_provisioner.py` and `tests/test_package_identity_pipeline.py`. MSIX now rejects symlinked/oversized input, unsafe/duplicate ZIP members, ZIP symlinks, excessive expansion, missing or malformed BlockMap/Content Types/manifest, CRC-corrupted payloads, and GAME MSIX lacking an executable. These are fail-closed local checks, not Microsoft certification.
+- **Factory handoff fix already exists:** Factory [Draft PR #11](https://github.com/shihuiarenjinba-png/AI-Game-Factory/pull/11) at `6a0f69fa371e1a87a5247974a436f8a7e5816cac`, CI [#40456038174](https://github.com/shihuiarenjinba-png/AI-Game-Factory/actions/runs/40456038174) PASS. It separates immutable `source_sha` from `factory_head_sha`. **Do not integrate it into the fixed Factory source branch before official Identity CAS**.
+- **Current phase:** `LOCAL_EXE_INSPECTED__PARTNER_CENTER_IDENTITY_HOLD`.
+- **Last completed step:** Signal Sprint EXE artifact/DRY_RUN/local fixed-SHA PE build inspected; Factory PR #11 correlation fix implemented and CI green; Provisioner PR #8 MSIX safety code and regression tests committed.
+- **Next action:** Obtain authenticated Partner Center Identity evidence for exact request, verify Factory source branch still equals pinned SHA, then CAS-return `products/signal-sprint/store/approved-identity.json` on that original Factory branch and capture actual return commit SHA. **Only after CAS** integrate reviewed Factory safety and PR #11 onto a separate `codex/*` build branch, produce and verify real MakeAppx MSIX, deliver `type=game` to Windows-all-auto, run Checker and real Windows GUI QA.
+- **Resume repository/branch:** `shihuiarenjinba-png/Repository-Provisioner-game` / `codex/game-msix-package-safety-20261027-1510` for this safety patch; `codex/e2e-belt-connection-20261027` remains the live integration baseline until reviewed.
+- **Blocked by:** authenticated official Partner Center Identity, Factory CAS return, post-CAS Factory safety integration, real MSIX, Windows-all-auto GAME receipt, Checker/GUI QA.
+- **Status:** `HOLD` for official Identity / MSIX / bridge / local QA; no Store submission, merge, force push or main/release changes. Re-fetch current PR #7 and #8 HEAD before cherry-picking or running local work.
+
+
+## 2026-10-27 16:18 JST — Signal Sprint manifest-bound executable safety
+
+This is a **review-only code checkpoint**. The active GAME product is still Signal Sprint; no second product may be generated. The fixed Factory source branch `codex/game-signal-sprint-undo-20261027` remains pinned to `c058cbf7fe38e02d929c67d047d717ff74bd522e`; do **not** integrate Factory safety PR #7 or handoff PR #11 into that branch before an authenticated Partner Center Identity CAS return.
+
+```json
+{
+  "active_product": "signal-sprint",
+  "phase": "LOCAL_EXE_INSPECTED__PARTNER_CENTER_IDENTITY_HOLD",
+  "last_completed_step": "Fixed-SHA Windows EXE rebuilt and inspected; GAME Provisioner MSIX manifest executable/payload binding code and negative regression tests committed for review",
+  "next_action": "Obtain authenticated official Partner Center Identity for the pinned request, re-fetch Factory source branch HEAD and require exact c058cbf7..., then CAS-return approved-identity.json; only after CAS integrate Factory safety PR #7 and handoff PR #11 on a separate codex/* build branch",
+  "resume_repository": "shihuiarenjinba-png/Repository-Provisioner-game",
+  "resume_branch": "codex/game-msix-package-safety-20261027-1510",
+  "source_sha": "c058cbf7fe38e02d929c67d047d717ff74bd522e",
+  "blocked_by": ["No authenticated official Partner Center Identity", "No Factory CAS return commit", "No verified real GAME MSIX, Windows-all-auto receipt or local GUI/Checker QA"],
+  "new_product_allowed": false,
+  "request_id": "game-signal-sprint-c058cbf7fe38e02d929c67d047d717ff74bd522e",
+  "product_type": "GAME",
+  "source_factory": "AI-Game-Factory",
+  "source_repository": "shihuiarenjinba-png/AI-Game-Factory",
+  "source_branch": "codex/game-signal-sprint-undo-20261027",
+  "slug": "signal-sprint"
+}
+```
+
+- New implementation commits: `66bf24abcfcfa0568a0c2fd24269addd2c2b643d` (reject unbound/unsafe manifest launch target), `65952676ecd933d0e6f7259e37dba46bda9dad93` (regression tests). The prior PR #8 package CRC/ZIP/metadata safety remains intact.
+- A helper EXE elsewhere in an MSIX no longer satisfies the GAME launchable-executable gate if the manifest points to a missing EXE. Windows backslash separators are normalized; traversal paths are rejected. Test fixture declares an Application executable; negative tests cover missing target, traversal, and no Identity return on invalid MSIX.
+- Local job: `C:\\qa\\signal-sprint\\live-job.json`; source EXE Artifact ID `12706862577` / Run `40443340158`, ZIP digest `sha256:e48a0426595dc227988f12944921511a47d5c8feca8b063a161dd0dd61306412`. The official Identity evidence file must remain local-only: `C:\\qa\\signal-sprint\\official-identity-private.json`.
+- Expected pre-Identity result: `HOLD / OBTAIN_AUTHENTICATED_OFFICIAL_IDENTITY`, `github_return=NOT_APPLIED`, `windows_all_auto_record=null`. After authenticated evidence and explicit approval, exact source branch CAS return should produce a real Git **commit** SHA and `HOLD / GITHUB_REBUILD_MSIX`; this is not GAME E2E PASS.
+- After CAS: preserve the original immutable `source_sha`; distinguish `factory_head_sha` for the MSIX build. Validate real MSIX SHA/CRC/manifest executable, handoff correlation, Windows-all-auto `type=game` receipt, local QA, and Checker GUI/install evidence. No Store submission, merge, force push or main/release changes.
+- Verification: previous PR #8 CI run `40459705194` passed; the two new commits require fresh CI confirmation before being called PASS.
+
+## 2026-10-27 — GAME approved Identity slug correlation hardening
+
+- Active product: `signal-sprint`; phase: `LOCAL_EXE_INSPECTED__PARTNER_CENTER_IDENTITY_HOLD`; new_product_allowed: `false`.
+- Request: `game-signal-sprint-c058cbf7fe38e02d929c67d047d717ff74bd522e`; immutable source: `AI-Game-Factory/codex/game-signal-sprint-undo-20261027` @ `c058cbf7fe38e02d929c67d047d717ff74bd522e`.
+- Last completed product step: pinned real Windows EXE rebuilt and inspected. Code checkpoint: approved-identity.json now carries the original `slug`; verified existing Identity reuse refuses absent/mismatched `slug`. Regression covers the CAS payload and a changed-slug collision.
+- Resume: `shihuiarenjinba-png/Repository-Provisioner-game` / `codex/game-msix-package-safety-20261027-1510` (use current GitHub HEAD and CI, never a stale SHA).
+- Next action: authenticated Partner Center official Identity on local Windows only; use reviewed Windows-all-auto PR #16 check-only worker with this Provisioner safety branch; recheck fixed Factory HEAD immediately before explicit approved CAS return. On success, use dedicated Factory build/integration branch for safety PR #7 and handoff PR #11; do not modify the fixed source branch before CAS.
+- Blocked by: official Identity evidence and human/local CAS approval. No real MSIX, Windows-all-auto GAME receipt or GUI/Checker QA. CI and E2E PASS are separate; this commit is code/test preparation only.
+- No main/release writes, merges, force pushes, Store submission, or second product.
+
+## 2026-10-27 — GAME official Identity JSON ambiguity gate (current checkpoint)
+
+The active product remains **Signal Sprint only**. This checkpoint fixes a real fail-open JSON ambiguity, **not** the external Partner Center Identity HOLD. Standard `json.loads` previously accepted duplicate `source_sha` keys and silently selected the last one, including in official Identity evidence and existing Identity reuse. The reviewed GAME Provisioner safety branch now rejects duplicate JSON keys before correlation checks, including nested objects.
+
+- Code + regression commit: `87047e8dcb2d67eb0936cd37cbd099876418b6a4`; changed `package_identity_provisioner.py` and `tests/test_package_identity_pipeline.py`.
+- CI: [Run 40479843335](https://github.com/shihuiarenjinba-png/Repository-Provisioner-game/actions/runs/40479843335) **SUCCESS**; Ubuntu and Windows full `unittest discover` and Python compile passed.
+- Existing Factory product [PR #10](https://github.com/shihuiarenjinba-png/AI-Game-Factory/pull/10) still has fixed HEAD `c058cbf7fe38e02d929c67d047d717ff74bd522e`. Factory safety PR #7 diverged; Factory handoff PR #11 at `6a0f69fa371e1a87a5247974a436f8a7e5816cac` remains review-only until **after** approved Identity CAS.
+- Provisioner integration [PR #7](https://github.com/shihuiarenjinba-png/Repository-Provisioner-game/pull/7) remains at `7ac69a43f3b06402a942b7f31ec3070f67c67688`; safety PR #8 is ahead by 9 commits at the code checkpoint and must be checked again before local use.
+- Windows-all-auto transport [PR #14](https://github.com/shihuiarenjinba-png/Windows-all-auto/pull/14) was observed at `12c28af9e9103367f5ac03c168f9881cbec46370`; local Identity worker [PR #16](https://github.com/shihuiarenjinba-png/Windows-all-auto/pull/16) at `85e63d163dbcc5314cbf6594a2cd3d6c40695567`. These branches are diverged and must not be blindly merged.
+- Factory EXE Artifact `game-signal-sprint-exe-c058cbf7fe38e02d929c67d047d717ff74bd522e` / Run `40443340158` / Artifact ZIP digest `sha256:e48a0426595dc227988f12944921511a47d5c8feca8b063a161dd0dd61306412` is still available and is **not** a real MSIX.
+
+```json
+{
+  "active_product": "signal-sprint",
+  "phase": "LOCAL_EXE_INSPECTED__PARTNER_CENTER_IDENTITY_HOLD",
+  "last_completed_step": "Fixed-SHA EXE inspected; Provisioner official Identity JSON duplicate-key fail-closed patch and Ubuntu/Windows full CI passed",
+  "next_action": "On local Windows use the pinned Signal Sprint job and reviewed Provisioner PR #8 code, obtain authenticated Partner Center official Identity evidence, run Windows-all-auto PR #16 check-only worker, verify exact Factory HEAD and explicit CAS approval before any --apply; after CAS integrate Factory safety PR #7 and handoff PR #11 on a separate build branch",
+  "blocked_by": ["EXTERNAL_IDENTITY: no authenticated Partner Center official Identity evidence", "HUMAN_APPROVAL: no explicit local CAS approval", "No real MSIX, Windows-all-auto GAME receipt or Windows GUI/Checker QA"],
+  "resume_repository": "shihuiarenjinba-png/Repository-Provisioner-game",
+  "resume_branch": "codex/game-msix-package-safety-20261027-1510",
+  "source_sha": "c058cbf7fe38e02d929c67d047d717ff74bd522e",
+  "factory_head_sha": null,
+  "build_sha": null,
+  "request_id": "game-signal-sprint-c058cbf7fe38e02d929c67d047d717ff74bd522e",
+  "product_type": "GAME",
+  "source_factory": "AI-Game-Factory",
+  "source_repository": "shihuiarenjinba-png/AI-Game-Factory",
+  "source_branch": "codex/game-signal-sprint-undo-20261027",
+  "slug": "signal-sprint",
+  "ci_run_id": 40479843335,
+  "ci_conclusion": "SUCCESS",
+  "exe_artifact_id": 12706862577,
+  "real_msix_artifact": null,
+  "windows_all_auto_receipt": null,
+  "local_qa_receipt": null,
+  "new_product_allowed": false
+}
+```
+
+**Next repo/branch:** `Repository-Provisioner-game/codex/game-msix-package-safety-20261027-1510` (re-fetch HEAD after this documentation commit); check `Windows-all-auto/codex/local-identity-return-worker-20261027-1639` and `AI-Game-Factory/codex/game-signal-sprint-undo-20261027@c058cbf7fe38e02d929c67d047d717ff74bd522e`. Do not move Factory source, merge, force push, or submit to Store.
+
+## GAME official verification timestamp gate — 2026-10-27
+
+- **Active product:** `signal-sprint`; `new_product_allowed=false`. Phase remains `LOCAL_EXE_INSPECTED__PARTNER_CENTER_IDENTITY_HOLD`. This checkpoint is a **CODE_FIX**, not an Identity return or GAME E2E promotion.
+- **Reproduced defect:** `OfficialIdentityProvider.lookup` required `verified_at` as a JSON key but accepted `null`, malformed dates and far-future timestamps. These could enter the official Identity CAS proposal if a caller bypassed the local check-only worker.
+- **Code commit:** `650174999d783f84935aa440bee4070e795d953c`; **regression test:** `c11db8db2bf10186d4f0902a6acee1436e79872c`; **CI-reproduced regex correction:** `f76b25828767c9c20ddbc12dc9838f39b55c50d7`. Reject non-RFC3339, missing timezone, impossible dates and future times beyond five minutes' clock skew. Valid timestamp fixture remains accepted. CI run `40486198248` failed on the initially over-escaped regex and was corrected in the same run; verify the newest HEAD's CI before claiming PASS.
+- **Fixed immutable source:** `AI-Game-Factory/codex/game-signal-sprint-undo-20261027` at `c058cbf7fe38e02d929c67d047d717ff74bd522e`. `request_id=game-signal-sprint-c058cbf7fe38e02d929c67d047d717ff74bd522e`, `product_type=GAME`, `source_factory=AI-Game-Factory`, `slug=signal-sprint`. No change to this Factory source branch.
+- **Local job:** `C:\\qa\\signal-sprint\\live-job.json`. **Identity evidence (local-only):** `C:\\qa\\signal-sprint\\official-identity-private.json`. **EXE Artifact:** run `40443340158`, ID `12706862577`, ZIP SHA-256 `e48a0426595dc227988f12944921511a47d5c8feca8b063a161dd0dd61306412`. It is **not** an MSIX.
+- **Next action:** use the reviewed `Windows-all-auto/codex/local-identity-return-worker-20261027-1639` check-only mode with the current Provisioner PR #8 HEAD; obtain separately authenticated Partner Center evidence and explicit local CAS approval. Immediately before `--apply`, verify the fixed Factory HEAD still equals `c058cbf7...`; otherwise `CONFLICT`. After CAS, integrate Factory safety PR #7 and handoff PR #11 only on a dedicated build branch. Before accepting GAME MSIX, test that Factory handoff binds approved `slug` and Manifest launch executable/payload CRC, and preserves `source_sha` distinct from `factory_head_sha`.
+- **Blocked by:** `EXTERNAL_IDENTITY`, `HUMAN_APPROVAL`; Factory return commit, `factory_head_sha`, real MSIX SHA/Artifact, Windows-all-auto `type=game` receipt, local QA and Checker GUI/install receipt remain **null**. CI PASS, contract PASS, real E2E PASS and commercial quality PASS are separate gates.
+- **Resume:** `shihuiarenjinba-png/Repository-Provisioner-game` / `codex/game-msix-package-safety-20261027-1510` (re-fetch latest HEAD and CI). Also inspect `Windows-all-auto/codex/e2e-belt-connection-20261027:ops/active_e2e_handoff.json` and PR #16. No main/release changes, merge, force push, Store submission or new game.

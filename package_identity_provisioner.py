@@ -11,7 +11,7 @@ import base64
 import ctypes
 from ctypes import wintypes
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
@@ -88,14 +88,24 @@ def redact(text: str) -> str:
     return result[:4000]
 
 
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Reject ambiguous duplicate keys in operator evidence and local state."""
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("Duplicate JSON key")
+        result[key] = value
+    return result
+
+
 def load_json(path: Path, max_bytes: int = 65_536) -> dict[str, Any]:
     if not path.is_file():
         raise HoldError(f"JSON file not found: {path}")
     if path.stat().st_size > max_bytes:
         raise HoldError(f"JSON file exceeds {max_bytes} bytes")
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        value = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_unique_json_object)
+    except (OSError, UnicodeError, ValueError) as exc:
         raise HoldError(f"Invalid JSON: {exc}") from exc
     if not isinstance(value, dict):
         raise HoldError("JSON root must be an object")
@@ -447,8 +457,10 @@ def verify_game_windows_exe(path: Path) -> None:
 
 
 def inspect_package(path: Path) -> dict[str, Any]:
-    if not path.is_file():
-        raise HoldError("Package artifact does not exist")
+    if path.is_symlink() or not path.is_file():
+        raise HoldError("Package artifact is missing or symlinked")
+    if not 0 < path.stat().st_size <= 300 * 1024 * 1024:
+        raise HoldError("Package artifact is empty or exceeds local QA size limit")
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
@@ -464,32 +476,83 @@ def inspect_package(path: Path) -> dict[str, Any]:
     try:
         with zipfile.ZipFile(path) as archive:
             members = archive.infolist()
-            # Never accept a package whose manifest is intact but its EXE or
-            # another payload has a corrupt CRC. Bound decompression first.
-            if (not members or len(members) > 2000 or
-                    sum(member.file_size for member in members) > 300 * 1024 * 1024):
+            if not 1 <= len(members) <= 2000:
                 raise HoldError("MSIX has excessive or missing ZIP payload")
+            seen: set[str] = set()
+            total_size = 0
+            has_executable = False
+            for member in members:
+                name = member.filename
+                # Windows resolves case-insensitively. Never let an ambiguous,
+                # traversing, linked or decompression-bomb member reach QA.
+                if (not name or "\\" in name or name.startswith("/") or
+                        ":" in name.split("/")[0] or
+                        any(part in {"", ".", ".."} for part in name.rstrip("/").split("/"))):
+                    raise HoldError("MSIX contains an unsafe ZIP member path")
+                key = name.casefold()
+                if key in seen:
+                    raise HoldError("MSIX contains duplicate case-insensitive ZIP members")
+                seen.add(key)
+                if (member.create_system == 3 and
+                        (member.external_attr >> 16) & 0o170000 == 0o120000):
+                    raise HoldError("MSIX contains a ZIP symlink")
+                total_size += member.file_size
+                if (member.file_size > 300 * 1024 * 1024 or
+                        total_size > 300 * 1024 * 1024 or
+                        (member.file_size > 0 and member.compress_size == 0) or
+                        (member.compress_size and member.file_size > 100 * member.compress_size)):
+                    raise HoldError("MSIX ZIP payload exceeds safe decompression limits")
+                if not member.is_dir() and name.lower().endswith(".exe"):
+                    has_executable = True
+            required = {"appxmanifest.xml": "Package",
+                        "appxblockmap.xml": "BlockMap",
+                        "[content_types].xml": "Types"}
+            for filename, expected_root in required.items():
+                member = next((m for m in members if m.filename.casefold() == filename), None)
+                if member is None or not 0 < member.file_size <= 2 * 1024 * 1024:
+                    raise HoldError("MSIX required package metadata missing or oversized: " + filename)
+                document = ET.fromstring(archive.read(member))
+                if document.tag.rsplit("}", 1)[-1] != expected_root:
+                    raise HoldError("MSIX package metadata has invalid XML root: " + filename)
+                if filename == "appxmanifest.xml":
+                    root = document
+            # Verify the CRC of *every* payload, not just metadata or the EXE.
             if archive.testzip() is not None:
                 raise HoldError("MSIX contains a CRC-corrupted payload")
-            manifest_name = next((n for n in archive.namelist() if n.lower() == "appxmanifest.xml"), None)
-            if manifest_name is None:
-                raise HoldError("MSIX is missing AppxManifest.xml")
-            raw = archive.read(manifest_name)
-        root = ET.fromstring(raw)
         identity = next((element for element in root.iter() if element.tag.rsplit("}", 1)[-1] == "Identity"), None)
         if identity is None:
             raise HoldError("MSIX manifest has no Identity element")
+        # A stray helper.exe does not make a GAME package launchable. Bind
+        # every manifest-declared Application executable to an actual payload.
+        # MSIX manifests may use Windows backslashes while ZIP uses '/'.
+        declared_executables = []
+        for element in root.iter():
+            if element.tag.rsplit("}", 1)[-1] != "Application":
+                continue
+            executable = element.attrib.get("Executable")
+            if not isinstance(executable, str) or not executable:
+                continue
+            normalized = executable.replace("\\", "/")
+            if (normalized.startswith("/") or ":" in normalized.split("/")[0]
+                    or any(part in {"", ".", ".."} for part in normalized.split("/"))):
+                raise HoldError("MSIX manifest declares an unsafe executable path")
+            declared_executables.append(normalized.casefold())
+        payload_files = {member.filename.casefold() for member in members if not member.is_dir()}
+        manifest_executable_present = bool(declared_executables) and all(
+            name.endswith(".exe") and name in payload_files
+            for name in declared_executables
+        )
         name, publisher, version = (identity.attrib.get(key) for key in ("Name", "Publisher", "Version"))
         if not name or not publisher or not version:
             raise HoldError("MSIX Identity is incomplete")
         family = _package_family_name(name, publisher)
         result.update(package_identity=name, publisher=publisher, version=version,
-                      package_family_name=family,
+                      package_family_name=family, has_executable=has_executable,
+                      manifest_executable_present=manifest_executable_present,
                       package_sid=_windows_package_sid(family) if family else None)
         return result
-    except (zipfile.BadZipFile, ET.ParseError, KeyError) as exc:
-        raise HoldError(f"Invalid MSIX package: {exc}") from exc
-
+    except (zipfile.BadZipFile, ET.ParseError, KeyError, RuntimeError, EOFError, OSError) as exc:
+        raise HoldError(f"Invalid MSIX package: {type(exc).__name__}") from exc
 
 class OfficialIdentityProvider:
     """Read an operator export from a separately authenticated Partner Center session."""
@@ -510,6 +573,17 @@ class OfficialIdentityProvider:
             raise ConflictError("Official identity evidence belongs to another product/request/SHA")
         if not isinstance(raw["authenticated_account"], str) or not 3 <= len(raw["authenticated_account"]) <= 100:
             raise HoldError("Authenticated Partner Center account identifier is missing")
+        verified_at = raw["verified_at"]
+        if (not isinstance(verified_at, str) or not re.fullmatch(
+                r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})",
+                verified_at)):
+            raise HoldError("Official Identity verification timestamp must be RFC3339 with timezone")
+        try:
+            verified_time = datetime.fromisoformat(verified_at.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise HoldError("Invalid official Identity verification timestamp") from exc
+        if verified_time.astimezone(timezone.utc) > datetime.now(timezone.utc) + timedelta(minutes=5):
+            raise HoldError("Official Identity verification timestamp is in the future")
         url = urlparse(str(raw["official_evidence_url"]))
         if url.scheme != "https" or url.hostname not in {"partner.microsoft.com", "partnercenter.microsoft.com"} or url.username or url.password or url.fragment:
             raise HoldError("Official evidence URL is not a trusted Partner Center URL")
@@ -580,6 +654,7 @@ class GitHubReturnClient:
             raise ConflictError("approved-identity.json already exists and will not be overwritten")
         approved = {"schema_version": SCHEMA_VERSION, "reviewed": True, "source": "partner_center",
                     "request_id": job.request_id, "product_type": job.product_type,
+                    "slug": job.slug,
                     "source_factory": job.source_factory, "source_repository": job.source_repository,
                     "source_branch": job.source_branch, "source_sha": job.source_sha,
                     "verified_source_sha": job.source_sha, "package_sha256": package["sha256"],
@@ -647,7 +722,8 @@ class GitHubReturnClient:
         if not isinstance(existing, dict) or existing.get("encoding") != "base64":
             return False
         try:
-            content = json.loads(base64.b64decode(existing["content"], validate=True))
+            content = json.loads(base64.b64decode(existing["content"], validate=True),
+                                 object_pairs_hook=_unique_json_object)
         except (KeyError, ValueError, TypeError, json.JSONDecodeError):
             return False
         expected = {
@@ -658,6 +734,7 @@ class GitHubReturnClient:
             "evidence_url": official["official_evidence_url"],
             "request_id": job.request_id,
             "product_type": job.product_type,
+            "slug": job.slug,
             "source_factory": job.source_factory,
             "source_repository": job.source_repository,
             "source_branch": job.source_branch,
@@ -758,6 +835,10 @@ class Provisioner:
                     root = self.work_dir / hashlib.sha256(job.request_id.encode()).hexdigest()[:16]
                     source_dir = self.source.acquire(job, root / "source")
                     package = inspect_package(self.builder.build(job, source_dir, root / "artifacts", self.config))
+                    if (self.config.product_type == "GAME" and package["kind"] in {"msix", "appx"}
+                            and not (package.get("has_executable")
+                                     and package.get("manifest_executable_present"))):
+                        raise HoldError("GAME MSIX lacks a manifest-bound executable payload")
                     # Signal Sprint currently produces a real unsigned EXE.
                     # The official Identity must be returned BEFORE the Factory
                     # can create an MSIX. Preserve the EXE SHA as a HOLD stage,
