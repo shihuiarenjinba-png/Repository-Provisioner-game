@@ -248,33 +248,49 @@ class GitHubReturnTests(unittest.TestCase):
         self.assertEqual(result["commit_sha"], "b" * 40)
     def test_existing_identity_reuse_requires_verified_provenance(self):
         official = evidence()
+        selected_job = Job.validate(job(), config())
+        package = package_result()
         approved = {
             "reviewed": True, "source": "partner_center",
-            **{k: official[k] for k in ("store_id", "name", "publisher", "version")},
+            **{k: official[k] for k in ("store_id", "name", "publisher", "version",
+                                        "package_family_name", "package_sid")},
+            "request_id": selected_job.request_id, "product_type": selected_job.product_type,
+            "source_factory": selected_job.source_factory, "source_repository": selected_job.source_repository,
+            "source_branch": selected_job.source_branch, "source_sha": selected_job.source_sha,
+            "verified_source_sha": selected_job.source_sha, "package_sha256": package["sha256"],
+            "signature_status": package["signature_status"],
             "verified_by": official["authenticated_account"],
             "evidence_url": official["official_evidence_url"],
         }
         def wrapped(obj):
             return {"encoding": "base64", "content": base64.b64encode(
                 json.dumps(obj).encode("utf-8")).decode("ascii")}
-        self.assertTrue(GitHubReturnClient._existing_matches(wrapped(approved), official))
+        self.assertTrue(GitHubReturnClient._existing_matches(wrapped(approved), official, selected_job, package))
         for changes in ({"reviewed": 1}, {"reviewed": False}, {"source": "unverified"},
                         {"verified_by": "wrong-user"}, {"evidence_url": "https://evil.invalid"},
                         {"store_id": "9N0000000000"}):
             with self.subTest(changes=changes):
                 self.assertFalse(GitHubReturnClient._existing_matches(
-                    wrapped({**approved, **changes}), official))
+                    wrapped({**approved, **changes}), official, selected_job, package))
         for missing in approved:
             with self.subTest(missing=missing):
                 self.assertFalse(GitHubReturnClient._existing_matches(
-                    wrapped({k: v for k, v in approved.items() if k != missing}), official))
-        self.assertFalse(GitHubReturnClient._existing_matches(wrapped([]), official))
+                    wrapped({k: v for k, v in approved.items() if k != missing}), official, selected_job, package))
+        self.assertFalse(GitHubReturnClient._existing_matches(wrapped([]), official, selected_job, package))
 
     def test_existing_identity_reports_branch_commit_not_blob_sha(self):
         official = evidence()
+        selected_job = Job.validate(job(), config())
+        package = package_result()
         approved = {
             "reviewed": True, "source": "partner_center",
-            **{k: official[k] for k in ("store_id", "name", "publisher", "version")},
+            **{k: official[k] for k in ("store_id", "name", "publisher", "version",
+                                        "package_family_name", "package_sid")},
+            "request_id": selected_job.request_id, "product_type": selected_job.product_type,
+            "source_factory": selected_job.source_factory, "source_repository": selected_job.source_repository,
+            "source_branch": selected_job.source_branch, "source_sha": selected_job.source_sha,
+            "verified_source_sha": selected_job.source_sha, "package_sha256": package["sha256"],
+            "signature_status": package["signature_status"],
             "verified_by": official["authenticated_account"],
             "evidence_url": official["official_evidence_url"],
         }
@@ -292,7 +308,7 @@ class GitHubReturnTests(unittest.TestCase):
                         "content": base64.b64encode(json.dumps(approved).encode()).decode()}}
             raise AssertionError("unexpected API write or read: " + endpoint)
         result = GitHubReturnClient(fake_api).return_identity(
-            Job.validate(job(), config()), config(), official, True)
+            selected_job, config(), official, package, True)
         self.assertEqual(result["status"], "EXISTING_VERIFIED")
         self.assertEqual(result["commit_sha"], SHA)
         self.assertNotEqual(result["commit_sha"], "b" * 40)
@@ -522,6 +538,16 @@ class FailureClassificationTests(unittest.TestCase):
             GitHubReturnClient._gh_api("graphql")
     def test_secret_redaction(self):
         self.assertNotIn("supersecret", redact("Authorization: bearer supersecret"))
+    def test_build_failure_keeps_redacted_root_cause_from_output_tail(self):
+        completed = subprocess.CompletedProcess(
+            ["builder"], 17, "stdout detail", "Authorization: bearer supersecret\n" + "noise" * 500 + "\nROOT_CAUSE")
+        with patch("subprocess.run", return_value=completed), self.assertRaises(HoldError) as raised:
+            PackageBuilder._run(["builder"], ROOT, 10)
+        message = str(raised.exception)
+        self.assertIn("exit 17", message)
+        self.assertIn("ROOT_CAUSE", message)
+        self.assertIn("[REDACTED]", message)
+        self.assertNotIn("supersecret", message)
     def test_signal_sprint_builder_selects_real_game_not_newer_decoy(self):
         class StubBuilder(PackageBuilder):
             def _build_windows(self, source):
@@ -554,6 +580,20 @@ class FailureClassificationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(HoldError):
                 PackageBuilder()._build_windows(Path(tmp))
+    def test_windows_builder_prefers_pwsh_for_factory_script(self):
+        calls = []
+        class RecordingBuilder(PackageBuilder):
+            @staticmethod
+            def _run(command, cwd, timeout):
+                calls.append((command, cwd, timeout))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / "scripts" / "build-windows.ps1"
+            script.parent.mkdir()
+            script.write_text("Write-Output ok", encoding="utf-8")
+            with patch("shutil.which", side_effect=lambda name: "C:/tools/pwsh.exe" if name == "pwsh" else None):
+                RecordingBuilder()._build_windows(root)
+        self.assertEqual(calls[0][0][0], "C:/tools/pwsh.exe")
     def test_godot_missing_project_is_hold(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

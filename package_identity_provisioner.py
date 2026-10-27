@@ -330,7 +330,8 @@ class PackageBuilder:
             path = source / relative
             if not path.is_file():
                 continue
-            command = (["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(path)]
+            powershell = shutil.which("pwsh") or shutil.which("powershell") or "powershell"
+            command = ([powershell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(path)]
                        if path.suffix.lower() == ".ps1" else ["cmd", "/d", "/c", str(path)])
             self._run(command, source, 1800)
             return
@@ -360,7 +361,11 @@ class PackageBuilder:
         except subprocess.TimeoutExpired as exc:
             raise RetryableError("Package build timed out") from exc
         if result.returncode:
-            raise HoldError("Package build failed: " + redact(result.stderr or result.stdout)[:500])
+            combined = "\n".join(part for part in (result.stderr, result.stdout) if part)
+            diagnostic = redact(combined).strip() or "<no process output>"
+            if len(diagnostic) > 1800:
+                diagnostic = diagnostic[:300] + "\n...[truncated]...\n" + diagnostic[-1400:]
+            raise HoldError(f"Package build failed (exit {result.returncode}): {diagnostic}")
 
 
 class _PackageVersion(ctypes.Union):
@@ -412,7 +417,8 @@ def signature_status(path: Path) -> str:
     if os.name != "nt":
         return "UNAVAILABLE_NON_WINDOWS"
     escaped = str(path).replace("'", "''")
-    command = ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+    powershell = shutil.which("pwsh") or shutil.which("powershell") or "powershell"
+    command = [powershell, "-NoProfile", "-NonInteractive", "-Command",
                f"(Get-AuthenticodeSignature -LiteralPath '{escaped}').Status.ToString()"]
     try:
         result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", timeout=30, check=False)

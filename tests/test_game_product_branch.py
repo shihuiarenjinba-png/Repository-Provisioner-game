@@ -79,10 +79,15 @@ class IndependentGameBranchTests(unittest.TestCase):
 
         official = {"store_id": "9NTESTONLY123", "name": "Test.Game",
                     "publisher": "CN=Test Only", "version": "1.0.0.0",
+                    "package_family_name": "Test.Game_abcdefghijklm",
+                    "package_sid": "S-1-15-2-1-2-3-4-5-6-7",
                     "authenticated_account": "test-only",
                     "official_evidence_url": "https://partner.microsoft.com/test"}
+        package = {"sha256": "d" * 64, "signature_status": "NOTSIGNED",
+                   "package_family_name": official["package_family_name"],
+                   "package_sid": official["package_sid"]}
         result = GitHubReturnClient(fake_api).return_identity(
-            Job.validate(request(), self.config), self.config, official, apply=True)
+            Job.validate(request(), self.config), self.config, official, package, apply=True)
         self.assertEqual(result["status"], "APPLIED")
         self.assertEqual(result["branch"], PRODUCT_BRANCH)
         self.assertEqual(result["path"], "products/signal-sprint/store/approved-identity.json")
@@ -102,7 +107,7 @@ class IndependentGameBranchTests(unittest.TestCase):
             raise AssertionError(endpoint)
         with self.assertRaises(ConflictError):
             GitHubReturnClient(fake_api).return_identity(
-                Job.validate(request(), self.config), self.config, {}, apply=True)
+                Job.validate(request(), self.config), self.config, {}, {}, apply=True)
 
     def test_same_request_id_different_branch_sha_or_slug_conflicts(self):
         with tempfile.TemporaryDirectory() as directory:

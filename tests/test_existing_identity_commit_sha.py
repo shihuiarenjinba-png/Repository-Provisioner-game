@@ -57,6 +57,9 @@ class ExistingIdentityCommitTests(unittest.TestCase):
             if "/manifest.json" in endpoint:
                 manifest = {"slug": "sample-product", "kind": "game"}
                 return {"encoding": "base64", "content": base64.b64encode(json.dumps(manifest).encode()).decode()}
+            if "/proposals/" in endpoint:
+                proposal = {"slug": "sample-product", "title": "Sample Product"}
+                return {"encoding": "base64", "content": base64.b64encode(json.dumps(proposal).encode()).decode()}
             if "/approved-identity.json" in endpoint:
                 return {"sha": BLOB, "encoding": "base64",
                         "content": base64.b64encode(json.dumps(approved).encode()).decode()}

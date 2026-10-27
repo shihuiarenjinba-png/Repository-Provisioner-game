@@ -2,7 +2,32 @@
 
 更新日: 2026-10-27 (Asia/Tokyo)
 
-## 判定
+## 現行統合判定（旧スナップショットより優先）
+
+**HOLD — Signal SprintのSHA固定Windows EXE生成と検査までは実証済み。公式Partner Center Identity、Factory CAS書戻し、正式IdentityによるMSIX再生成、Windows-all-auto受領、Windows-checker/UI QAは未実施。** Store提出は0件で、新規製品の生成は禁止を維持する。
+
+- 統合元: `codex/game-signal-sprint-exe-identity-stage-20261027` / `a5676f601b35e45ae21ce6e284579ed169e7b3b7`
+- ローカル作業ブランチ: `codex/e2e-belt-connection-20261027`
+- 自動テスト: **69件 / PASS 69 / FAIL 0 / SKIP 0**
+- 共通Schema正規化SHA-256: job `0fbdaf38d25563bf60f756fbf2dd03468517584fb7b05b1bf5f942bf27c1d599` / result `1264f0285283c77aceb2956d687ff3898657578b82ba37ff475a8565f8709310`
+- PowerShell 7 (`pwsh`)を優先し、未導入環境のみWindows PowerShellへフォールバックする。長いビルド失敗ログは秘密を伏せ、先頭と根本原因を含む末尾を保持する。
+
+### 実Signal Sprint証跡
+
+- Factory source: `shihuiarenjinba-png/AI-Game-Factory` / `codex/game-signal-sprint-undo-20261027` / `c058cbf7fe38e02d929c67d047d717ff74bd522e`
+- request_id: `game-signal-sprint-c058cbf7fe38e02d929c67d047d717ff74bd522e`
+- Factory Artifact ZIP SHA-256: `e48a0426595dc227988f12944921511a47d5c8feca8b063a161dd0dd61306412`
+- Artifact内EXE SHA-256: `9c31c3633de0d9e248cd1642f9003962f4f117bf6780cf4fab9f66d1d73485ad`（provenanceと実バイト一致）
+- ローカル再ビルドEXE: 11,387,518 bytes / SHA-256 `e8517df8cd31a40e5ce72afdd4e6a4d63626fb99f7ff8a4fa3296ff8deef05f4` / Authenticode `NOTSIGNED`
+- DRY_RUN: `DRY_RUN`、副作用0。
+- live結果: `HOLD` / `OBTAIN_AUTHENTICATED_OFFICIAL_IDENTITY`。packageは`INSPECTED`、kind=`exe`。GitHub返却`NOT_APPLIED`、Windows-all-auto recordは`null`。
+- 実Factory書戻しcommit SHA、Store ID、PFN、Package SID、正式MSIX URL: **なし**。値は推測していない。
+
+### 正確な再開地点
+
+認証済みPartner Centerから、この同一製品のStore ID、Identity Name、Publisher、Version、PFN、Package SID、認証アカウント、時刻、公式evidence URLを安全なローカルファイルへ取得する。相関7項目とEXE証跡を再確認後、同じrequest_idで`--official-identity <secure-path> --apply`を実行し、Factory作業ブランチHEADのCASが成功した場合だけ次のMSIX再生成へ渡す。既存IdentityやHEADが異なる場合はCONFLICT。
+
+## 旧判定
 
 **HOLD: オフライン実装、モック検証、DRY_RUNは完了。実製品MSIX生成、Partner Center公式ID取得、Factoryへの実返却は未確認。** テストPASSだけを完成とは扱わない。
 
@@ -76,14 +101,13 @@ The historical fixed-branch guidance above is superseded for this one active pro
 ```json
 {
   "active_product": "signal-sprint",
-  "phase": "WINDOWS_EXE_BUILT__LOCAL_PROVISIONER_HOLD",
-  "last_completed_step": "Factory Windows Actions generated unsigned SignalSprint.exe and SHA-pinned GAME intake artifact; Provisioner live local run not yet evidenced",
-  "next_action": "On authenticated local Windows: download verified Factory EXE Artifact, validate SHA and job fields, run Provisioner DRY_RUN, then real EXE build and official Partner Center evidence/Identity return on same pinned Factory source branch; integrate Factory official-identity MSIX safety gate before real MSIX",
+  "phase": "LOCAL_EXE_INSPECTED__PARTNER_CENTER_IDENTITY_HOLD",
+  "last_completed_step": "Factory Artifact verified; Provisioner DRY_RUN passed; pinned Factory SHA rebuilt locally into a real unsigned PE EXE and inspected",
+  "next_action": "Obtain authenticated Partner Center evidence for this exact product, then perform the reviewed CAS Identity return on the same pinned Factory work branch before any MSIX rebuild",
   "resume_repository": "shihuiarenjinba-png/Repository-Provisioner-game",
   "resume_branch": "codex/game-signal-sprint-exe-identity-stage-20261027",
   "source_sha": "c058cbf7fe38e02d929c67d047d717ff74bd522e",
   "blocked_by": [
-    "No proven local Provisioner Windows build of pinned Factory SHA",
     "No authenticated Partner Center official Identity export",
     "Factory safety PR #7 is diverged from Signal Sprint PR #10",
     "No real MSIX / Windows-all-auto game receipt / local GUI QA"
@@ -112,4 +136,4 @@ The historical fixed-branch guidance above is superseded for this one active pro
 3. Partner Center: with an authorized session, export the actual Store ID, Identity Name, Publisher, Version, authenticated account, timestamp and evidence URL. Only after local verification, run the same pinned live job with `--official-identity <local-secure>\\partner-center-evidence.json --apply`. Expected **stage**: `github_return.status=APPLIED` or `EXISTING_VERIFIED`, a real **commit** SHA, `status=HOLD`, `next_stage=GITHUB_REBUILD_MSIX`, `windows_all_auto_record=null`. Same request and SHA must replay without a second write; changed SHA/slug with the same request ID is `CONFLICT`.
 4. Before actual MSIX: safely integrate Factory official-evidence/CRC gates from its diverged safety PRs into the active product branch without force push or main merge. Build a real MSIX only from authenticated official Identity, validate payload CRC, executable, package SHA and provenance, then deliver only the real `type=game` MSIX to Windows-all-auto and perform local GUI QA plus Windows-checker. CI alone is not E2E PASS.
 
-**No verified local execution, official Identity, real MSIX or bridge receipt has been observed in this run.**
+**Local fixed-SHA EXE execution and inspection are verified. Official Identity, real MSIX, bridge receipt, GUI QA and Store submission have not occurred.**
