@@ -75,6 +75,48 @@ class SignalSprintContractTests(unittest.TestCase):
                              ("CONFLICT", "RECONCILE_CONFLICT"))
             self.assertEqual((src.calls, build.calls, gh.calls), (0, 0, 0))
 
+    def test_identity_retry_requires_resume_and_preserves_pinned_ledger(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src, build, gh = FakeSource(), FakeBuilder(), NoGithub()
+            p = Provisioner(ProductConfig.load(ROOT / "config.json"),
+                            root / "state", root / "work",
+                            source=src, builder=build, github=gh)
+            held = p.run(job(False))
+            self.assertEqual(held["status"], "HOLD")
+            rejected = p.run(job(False), apply=True)
+            self.assertEqual((rejected["status"], rejected["next_stage"]),
+                             ("CONFLICT", "RECONCILE_CONFLICT"))
+            self.assertIn("--resume-result", rejected["errors"][0])
+            self.assertEqual(p.ledger.read(REQUEST_ID)["response"]["package"]["sha256"],
+                             held["package"]["sha256"])
+            self.assertEqual((src.calls, build.calls, gh.calls), (1, 1, 0))
+
+    def test_tampered_resume_hash_cannot_replace_original_exe_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src, build, gh = FakeSource(), FakeBuilder(), NoGithub()
+            p = Provisioner(ProductConfig.load(ROOT / "config.json"),
+                            root / "state", root / "work",
+                            source=src, builder=build, github=gh)
+            held = p.run(job(False))
+            self.assertEqual(held["status"], "HOLD")
+            with build.path.open("r+b") as handle:
+                handle.seek(4096)
+                handle.write(b"changed but valid PE")
+            tampered = json.loads(json.dumps(held))
+            tampered["package"]["sha256"] = hashlib.sha256(build.path.read_bytes()).hexdigest()
+            resume_path = root / "tampered-resume-result.json"
+            resume_path.write_text(json.dumps(tampered), encoding="utf-8")
+            p.resume_result = resume_path
+            rejected = p.run(job(False), apply=True)
+            self.assertEqual((rejected["status"], rejected["next_stage"]),
+                             ("CONFLICT", "RECONCILE_CONFLICT"))
+            self.assertIn("previously pinned ledger", rejected["errors"][0])
+            self.assertEqual(p.ledger.read(REQUEST_ID)["response"]["package"]["sha256"],
+                             held["package"]["sha256"])
+            self.assertEqual((src.calls, build.calls, gh.calls), (1, 1, 0))
+
     def test_live_hold_resume_pins_bytes_without_rebuild(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

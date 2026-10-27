@@ -880,7 +880,25 @@ class Provisioner:
                     return response
                 try:
                     root = self.work_dir / hashlib.sha256(job.request_id.encode()).hexdigest()[:16]
+                    # A previous GAME EXE HOLD pins real bytes in the ledger.
+                    # Never silently rebuild on an Identity retry, or accept a
+                    # modified --resume-result that self-consistently rewrites
+                    # its own hash while changing the previously inspected EXE.
+                    pinned = prior_response.get("package") if (
+                        self.config.product_type == "GAME" and prior_status == "HOLD"
+                        and isinstance(prior_response.get("package"), dict)
+                        and prior_response["package"].get("kind") == "exe"
+                    ) else None
+                    if pinned is not None and self.resume_result is None:
+                        raise ConflictError("Pinned GAME EXE retry requires --resume-result; do not rebuild")
                     package = self._resume_package(job)
+                    if pinned is not None and (
+                        package is None or any(
+                            package.get(key) != pinned.get(key)
+                            for key in ("kind", "sha256", "size_bytes", "signature_status")
+                        )
+                    ):
+                        raise ConflictError("Resume EXE differs from previously pinned ledger evidence")
                     if package is None:
                         source_dir = self.source.acquire(job, root / "source")
                         package = inspect_package(self.builder.build(job, source_dir, root / "artifacts", self.config))
@@ -938,6 +956,15 @@ class Provisioner:
                         response["errors"] = ["Identity verified locally but GitHub return was not applied; rerun with --apply after review"]
                     self._save(job, response, {"stage": returned["status"], "package_sha256": package["sha256"]})
                     return response
+                except ConflictError as exc:
+                    # Invalid retries must not replace the original request
+                    # binding, EXE hash, or pending Identity checkpoint.
+                    if previous is not None:
+                        response = self._base_response(job, "CONFLICT", started)
+                        response["errors"] = [redact(str(exc))]
+                        response["next_stage"] = exc.next_stage
+                        return response
+                    return self._record_error(job, exc, started, previous)
                 except ProvisionerError as exc:
                     return self._record_error(job, exc, started, previous)
                 except Exception as exc:
