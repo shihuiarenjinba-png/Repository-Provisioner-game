@@ -302,6 +302,16 @@ class PackageBuilder:
         unique = sorted({p.resolve() for p in candidates if p.is_file()}, key=lambda p: p.stat().st_mtime)
         if not unique:
             raise HoldError("Build completed without a configured EXE/MSIX candidate")
+        # The generic **/*.exe glob can also find a helper or a stale EXE.
+        # Pin the active GAME product to the executable emitted by its real
+        # Windows build entrypoint; never inspect or return a decoy instead.
+        if config.product_type == "GAME" and job.slug == "signal-sprint":
+            expected = source / "dist" / "game" / "SignalSprint.exe"
+            if ((source / "dist").is_symlink() or (source / "dist" / "game").is_symlink()
+                    or expected.is_symlink() or not expected.is_file()
+                    or expected.resolve() not in unique):
+                raise HoldError("Signal Sprint build did not produce a fresh pinned executable")
+            return expected.resolve()
         return unique[-1]
 
     @staticmethod
