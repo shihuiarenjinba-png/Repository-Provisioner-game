@@ -417,6 +417,25 @@ def signature_status(path: Path) -> str:
     return result.stdout.strip().upper() if result.returncode == 0 and result.stdout.strip() else "INSPECTION_FAILED"
 
 
+def verify_game_windows_exe(path: Path) -> None:
+    """Check real PE structure before using a GAME EXE as Identity-return evidence.
+
+    This does not replace GUI testing or establish Store/MSIX readiness.
+    """
+    if path.is_symlink() or not path.is_file() or path.stat().st_size < 100_000:
+        raise HoldError("GAME Windows executable is missing, linked or implausibly small")
+    with path.open("rb") as handle:
+        dos = handle.read(64)
+        if len(dos) < 64 or dos[:2] != b"MZ":
+            raise HoldError("GAME executable is not a Windows PE candidate")
+        offset = int.from_bytes(dos[0x3c:0x40], "little")
+        if offset < 64 or offset > 1_048_576 or offset + 4 > path.stat().st_size:
+            raise HoldError("GAME executable has invalid PE header offset")
+        handle.seek(offset)
+        if handle.read(4) != b"PE\\x00\\x00":
+            raise HoldError("GAME executable has no PE signature")
+
+
 def inspect_package(path: Path) -> dict[str, Any]:
     if not path.is_file():
         raise HoldError("Package artifact does not exist")
@@ -690,6 +709,7 @@ class Provisioner:
                     # can create an MSIX. Preserve the EXE SHA as a HOLD stage,
                     # never mistake it for an MSIX or queue it to Windows-all-auto.
                     if self.config.product_type == "GAME" and package["kind"] == "exe":
+                        verify_game_windows_exe(Path(package["path"]))
                         try:
                             official = self.identity.lookup(job)
                         except HoldError as exc:
