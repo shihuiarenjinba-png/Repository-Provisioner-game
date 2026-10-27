@@ -815,9 +815,13 @@ class Provisioner:
         }
         if any(raw.get(key) != value for key, value in expected.items()):
             raise ConflictError("Resume result belongs to another request, source or stage")
+        github_return = raw.get("github_return")
+        official_identity = raw.get("official_identity")
         if (self.config.product_type != "GAME"
-                or (raw.get("github_return") or {}).get("status") != "NOT_APPLIED"
-                or (raw.get("official_identity") or {}).get("status") != "UNVERIFIED"):
+                or not isinstance(github_return, dict)
+                or not isinstance(official_identity, dict)
+                or github_return.get("status") != "NOT_APPLIED"
+                or official_identity.get("status") != "UNVERIFIED"):
             raise ConflictError("Resume result is not a pre-Identity GAME EXE hold")
         previous = raw.get("package")
         if not isinstance(previous, dict) or previous.get("kind") != "exe":

@@ -551,6 +551,25 @@ class OrchestratorTests(unittest.TestCase):
             self.assertEqual(source.calls, 0)
             self.assertEqual(builder.calls, 0)
 
+    def test_resume_result_rejects_malformed_status_objects_without_rebuild(self):
+        for field, invalid in (("github_return", ["NOT_APPLIED"]),
+                               ("official_identity", "UNVERIFIED")):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as tmp:
+                resume, _ = self.resume_fixture(tmp)
+                previous = json.loads(resume.read_text(encoding="utf-8"))
+                previous[field] = invalid
+                resume.write_text(json.dumps(previous), encoding="utf-8")
+                source, builder = FakeSource(), FakeBuilder(artifact_kind="exe")
+                runner = Provisioner(config(), Path(tmp) / "state", Path(tmp) / "work",
+                                     source=source, builder=builder,
+                                     identity=FakeIdentity(), github=FakeGitHub(),
+                                     resume_result=resume)
+                result = runner.run(job(), apply=False)
+                self.assertEqual(result["status"], "CONFLICT")
+                self.assertEqual(result["next_stage"], "RECONCILE_CONFLICT")
+                self.assertEqual(source.calls, 0)
+                self.assertEqual(builder.calls, 0)
+
     def test_resume_result_can_reach_existing_github_cas_client(self):
         with tempfile.TemporaryDirectory() as tmp:
             resume, package = self.resume_fixture(tmp)
