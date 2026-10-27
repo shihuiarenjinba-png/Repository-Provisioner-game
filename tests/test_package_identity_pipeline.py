@@ -390,6 +390,7 @@ class GitHubReturnTests(unittest.TestCase):
         self.assertEqual(approved["slug"], selected_job.slug)
         self.assertEqual(approved["request_id"], selected_job.request_id)
         self.assertEqual(approved["source_sha"], selected_job.source_sha)
+        self.assertEqual(approved["verified_at"], evidence()["verified_at"])
 
     def test_existing_identity_reuse_requires_verified_provenance(self):
         official = evidence()
@@ -407,6 +408,7 @@ class GitHubReturnTests(unittest.TestCase):
             "signature_status": package["signature_status"],
             "verified_by": official["authenticated_account"],
             "evidence_url": official["official_evidence_url"],
+            "verified_at": official["verified_at"],
         }
         def wrapped(obj):
             return {"encoding": "base64", "content": base64.b64encode(
@@ -414,6 +416,7 @@ class GitHubReturnTests(unittest.TestCase):
         self.assertTrue(GitHubReturnClient._existing_matches(wrapped(approved), official, selected_job, package))
         for changes in ({"reviewed": 1}, {"reviewed": False}, {"source": "unverified"},
                         {"verified_by": "wrong-user"}, {"evidence_url": "https://evil.invalid"},
+                        {"verified_at": "2000-01-01T00:00:00Z"},
                         {"store_id": "9N0000000000"}, {"slug": "another-game"}):
             with self.subTest(changes=changes):
                 self.assertFalse(GitHubReturnClient._existing_matches(
@@ -445,6 +448,7 @@ class GitHubReturnTests(unittest.TestCase):
             "signature_status": package["signature_status"],
             "verified_by": official["authenticated_account"],
             "evidence_url": official["official_evidence_url"],
+            "verified_at": official["verified_at"],
         }
         def fake_api(endpoint, body=None, allow_missing=False):
             if "git/ref/heads/" in endpoint:
