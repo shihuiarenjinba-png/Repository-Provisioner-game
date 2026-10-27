@@ -68,6 +68,7 @@ def make_msix(path: Path, name="Sample.Product", publisher="CN=Test Publisher", 
     manifest = f'''<?xml version="1.0" encoding="utf-8"?>
     <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">
       <Identity Name="{name}" Publisher="{publisher}" Version="{version}" />
+      <Applications><Application Id="Game" Executable="bin/Sample.exe" EntryPoint="Windows.FullTrustApplication" /></Applications>
     </Package>'''
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("AppxManifest.xml", manifest)
@@ -233,7 +234,39 @@ class PackageInspectionTests(unittest.TestCase):
             present = inspect_package(make_msix(Path(tmp) / "present.msix"))
             absent = inspect_package(make_msix(Path(tmp) / "absent.msix", include_exe=False))
         self.assertTrue(present["has_executable"])
+        self.assertTrue(present["manifest_executable_present"])
         self.assertFalse(absent["has_executable"])
+        self.assertFalse(absent["manifest_executable_present"])
+
+    def test_msix_rejects_unbound_helper_executable(self):
+        # A ZIP may contain a helper EXE while the launch target is missing.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = make_msix(Path(tmp) / "orphan.msix")
+            with zipfile.ZipFile(path, "a") as archive:
+                manifest = archive.read("AppxManifest.xml").decode()
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr("AppxManifest.xml", manifest.replace(
+                    'Executable="bin/Sample.exe"', 'Executable="bin/Missing.exe"'))
+                archive.writestr("AppxBlockMap.xml", "<BlockMap/>")
+                archive.writestr("[Content_Types].xml", "<Types/>")
+                archive.writestr("bin/Sample.exe", b"MZhelper")
+            result = inspect_package(path)
+        self.assertTrue(result["has_executable"])
+        self.assertFalse(result["manifest_executable_present"])
+
+    def test_msix_rejects_manifest_executable_traversal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = make_msix(Path(tmp) / "unsafe.msix")
+            with zipfile.ZipFile(path, "r") as archive:
+                manifest = archive.read("AppxManifest.xml").decode()
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr("AppxManifest.xml", manifest.replace(
+                    'Executable="bin/Sample.exe"', 'Executable="../outside.exe"'))
+                archive.writestr("AppxBlockMap.xml", "<BlockMap/>")
+                archive.writestr("[Content_Types].xml", "<Types/>")
+                archive.writestr("bin/Sample.exe", b"MZhelper")
+            with self.assertRaisesRegex(HoldError, "unsafe executable path"):
+                inspect_package(path)
 
     def test_msix_rejects_wrong_blockmap_root(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -589,6 +622,27 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(replay["next_stage"], "GITHUB_REBUILD_MSIX")
         self.assertEqual(collision["status"], "CONFLICT")
         self.assertEqual((builder.calls, github.calls), (1, 1))
+
+    def test_game_msix_with_orphan_executable_is_hold_before_identity_return(self):
+        class OrphanBuilder(FakeBuilder):
+            def build(self, _job, _source, output_dir, _config):
+                path = super().build(_job, _source, output_dir, _config)
+                with zipfile.ZipFile(path, "r") as archive:
+                    manifest = archive.read("AppxManifest.xml").decode()
+                with zipfile.ZipFile(path, "w") as archive:
+                    archive.writestr("AppxManifest.xml", manifest.replace(
+                        'Executable="bin/Sample.exe"', 'Executable="bin/Missing.exe"'))
+                    archive.writestr("AppxBlockMap.xml", "<BlockMap/>")
+                    archive.writestr("[Content_Types].xml", "<Types/>")
+                    archive.writestr("bin/Sample.exe", b"MZhelper")
+                return path
+        with tempfile.TemporaryDirectory() as tmp:
+            identity, github = FakeIdentity(), FakeGitHub()
+            result = self.runner(tmp, builder=OrphanBuilder(), identity=identity, github=github).run(
+                job(), apply=True)
+        self.assertEqual(result["status"], "HOLD")
+        self.assertIn("manifest-bound executable", result["errors"][0])
+        self.assertEqual((identity.calls, github.calls), (0, 0))
 
     def test_type_state_is_namespaced(self):
         with tempfile.TemporaryDirectory() as tmp:
