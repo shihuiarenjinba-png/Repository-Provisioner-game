@@ -8,6 +8,7 @@
 
 - 統合元: `codex/game-signal-sprint-exe-identity-stage-20261027` / `9a27eb3b7bb9bab4898acc42b028d1d0a0b04cf7`
 - ローカル作業ブランチ: `codex/e2e-belt-connection-20261027`
+- 現行Draft PR: https://github.com/shihuiarenjinba-png/Repository-Provisioner-game/pull/7
 - 自動テスト: **70件 / PASS 70 / FAIL 0 / SKIP 0**
 - 共通Schema正規化SHA-256: job `0fbdaf38d25563bf60f756fbf2dd03468517584fb7b05b1bf5f942bf27c1d599` / result `1264f0285283c77aceb2956d687ff3898657578b82ba37ff475a8565f8709310`
 - PowerShell 7 (`pwsh`)を優先し、未導入環境のみWindows PowerShellへフォールバックする。長いビルド失敗ログは秘密を伏せ、先頭と根本原因を含む末尾を保持する。
