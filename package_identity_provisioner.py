@@ -826,7 +826,11 @@ class Provisioner:
         previous = raw.get("package")
         if not isinstance(previous, dict) or previous.get("kind") != "exe":
             raise ConflictError("Resume result has no verified GAME EXE")
-        path = Path(str(previous.get("path", "")))
+        raw_path = previous.get("path")
+        if (not isinstance(raw_path, str) or not raw_path
+                or "\\0" in raw_path or not Path(raw_path).is_absolute()):
+            raise ConflictError("Resume result must pin an absolute local EXE path")
+        path = Path(raw_path)
         inspected = inspect_package(path)
         verify_game_windows_exe(path)
         for key in ("kind", "sha256", "size_bytes", "signature_status"):
