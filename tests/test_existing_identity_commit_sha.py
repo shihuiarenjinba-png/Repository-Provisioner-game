@@ -31,6 +31,7 @@ class ExistingIdentityCommitTests(unittest.TestCase):
             "publisher": "CN=Test Publisher", "version": "1.2.3.4",
             "authenticated_account": "operator@example.invalid",
             "official_evidence_url": "https://partner.microsoft.com/dashboard/products/123",
+            "verified_at": "2026-10-26T00:00:00Z",
             "package_family_name": "Sample.Product_abcdefghijklm",
             "package_sid": "S-1-15-2-1-2-3-4-5-6-7",
         }
@@ -49,6 +50,7 @@ class ExistingIdentityCommitTests(unittest.TestCase):
             "signature_status": package["signature_status"],
             "verified_by": official["authenticated_account"],
             "evidence_url": official["official_evidence_url"],
+            "verified_at": official["verified_at"],
         }
         calls = []
 
@@ -94,6 +96,7 @@ class ExistingIdentityCommitTests(unittest.TestCase):
             "publisher": "CN=Test Publisher", "version": "1.2.3.4",
             "authenticated_account": "operator@example.invalid",
             "official_evidence_url": "https://partner.microsoft.com/dashboard/products/123",
+            "verified_at": "2026-10-26T00:00:00Z",
             "package_family_name": "Sample.Product_abcdefghijklm",
             "package_sid": "S-1-15-2-1-2-3-4-5-6-7",
         }
@@ -110,6 +113,7 @@ class ExistingIdentityCommitTests(unittest.TestCase):
             "signature_status": package["signature_status"],
             "verified_by": official["authenticated_account"],
             "evidence_url": official["official_evidence_url"],
+            "verified_at": official["verified_at"],
             **{key: official[key] for key in ("store_id", "name", "publisher", "version",
                                               "package_family_name", "package_sid")},
         }
@@ -143,6 +147,7 @@ class ExistingIdentityCommitTests(unittest.TestCase):
             "publisher": "CN=Test Publisher", "version": "1.2.3.4",
             "authenticated_account": "operator@example.invalid",
             "official_evidence_url": "https://partner.microsoft.com/dashboard/products/123",
+            "verified_at": "2026-10-26T00:00:00Z",
             "package_family_name": "Sample.Product_abcdefghijklm",
             "package_sid": "S-1-15-2-1-2-3-4-5-6-7",
         }
@@ -170,6 +175,7 @@ class ExistingIdentityCommitTests(unittest.TestCase):
             "signature_status": package["signature_status"],
             "verified_by": official["authenticated_account"],
             "evidence_url": official["official_evidence_url"],
+            "verified_at": official["verified_at"],
         }
 
         def wrapped(value):
@@ -181,6 +187,7 @@ class ExistingIdentityCommitTests(unittest.TestCase):
             {"reviewed": False}, {"reviewed": 1}, {"source": "unknown"},
             {"verified_by": "different-operator"},
             {"evidence_url": "https://partner.microsoft.com/other-product"},
+            {"verified_at": "2000-01-01T00:00:00Z"},
             {"store_id": "9N0000000000"}, {"slug": "another-game"},
         ):
             with self.subTest(changes=changes):
