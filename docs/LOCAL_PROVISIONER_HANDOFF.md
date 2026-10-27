@@ -163,3 +163,35 @@ The historical fixed-branch guidance above is superseded for this one active pro
 - **Resume repository/branch:** `shihuiarenjinba-png/Repository-Provisioner-game` / `codex/game-msix-package-safety-20261027-1510` for this safety patch; `codex/e2e-belt-connection-20261027` remains the live integration baseline until reviewed.
 - **Blocked by:** authenticated official Partner Center Identity, Factory CAS return, post-CAS Factory safety integration, real MSIX, Windows-all-auto GAME receipt, Checker/GUI QA.
 - **Status:** `HOLD` for official Identity / MSIX / bridge / local QA; no Store submission, merge, force push or main/release changes. Re-fetch current PR #7 and #8 HEAD before cherry-picking or running local work.
+
+
+## 2026-10-27 16:18 JST — Signal Sprint manifest-bound executable safety
+
+This is a **review-only code checkpoint**. The active GAME product is still Signal Sprint; no second product may be generated. The fixed Factory source branch `codex/game-signal-sprint-undo-20261027` remains pinned to `c058cbf7fe38e02d929c67d047d717ff74bd522e`; do **not** integrate Factory safety PR #7 or handoff PR #11 into that branch before an authenticated Partner Center Identity CAS return.
+
+```json
+{
+  "active_product": "signal-sprint",
+  "phase": "LOCAL_EXE_INSPECTED__PARTNER_CENTER_IDENTITY_HOLD",
+  "last_completed_step": "Fixed-SHA Windows EXE rebuilt and inspected; GAME Provisioner MSIX manifest executable/payload binding code and negative regression tests committed for review",
+  "next_action": "Obtain authenticated official Partner Center Identity for the pinned request, re-fetch Factory source branch HEAD and require exact c058cbf7..., then CAS-return approved-identity.json; only after CAS integrate Factory safety PR #7 and handoff PR #11 on a separate codex/* build branch",
+  "resume_repository": "shihuiarenjinba-png/Repository-Provisioner-game",
+  "resume_branch": "codex/game-msix-package-safety-20261027-1510",
+  "source_sha": "c058cbf7fe38e02d929c67d047d717ff74bd522e",
+  "blocked_by": ["No authenticated official Partner Center Identity", "No Factory CAS return commit", "No verified real GAME MSIX, Windows-all-auto receipt or local GUI/Checker QA"],
+  "new_product_allowed": false,
+  "request_id": "game-signal-sprint-c058cbf7fe38e02d929c67d047d717ff74bd522e",
+  "product_type": "GAME",
+  "source_factory": "AI-Game-Factory",
+  "source_repository": "shihuiarenjinba-png/AI-Game-Factory",
+  "source_branch": "codex/game-signal-sprint-undo-20261027",
+  "slug": "signal-sprint"
+}
+```
+
+- New implementation commits: `66bf24abcfcfa0568a0c2fd24269addd2c2b643d` (reject unbound/unsafe manifest launch target), `65952676ecd933d0e6f7259e37dba46bda9dad93` (regression tests). The prior PR #8 package CRC/ZIP/metadata safety remains intact.
+- A helper EXE elsewhere in an MSIX no longer satisfies the GAME launchable-executable gate if the manifest points to a missing EXE. Windows backslash separators are normalized; traversal paths are rejected. Test fixture declares an Application executable; negative tests cover missing target, traversal, and no Identity return on invalid MSIX.
+- Local job: `C:\\qa\\signal-sprint\\live-job.json`; source EXE Artifact ID `12706862577` / Run `40443340158`, ZIP digest `sha256:e48a0426595dc227988f12944921511a47d5c8feca8b063a161dd0dd61306412`. The official Identity evidence file must remain local-only: `C:\\qa\\signal-sprint\\official-identity-private.json`.
+- Expected pre-Identity result: `HOLD / OBTAIN_AUTHENTICATED_OFFICIAL_IDENTITY`, `github_return=NOT_APPLIED`, `windows_all_auto_record=null`. After authenticated evidence and explicit approval, exact source branch CAS return should produce a real Git **commit** SHA and `HOLD / GITHUB_REBUILD_MSIX`; this is not GAME E2E PASS.
+- After CAS: preserve the original immutable `source_sha`; distinguish `factory_head_sha` for the MSIX build. Validate real MSIX SHA/CRC/manifest executable, handoff correlation, Windows-all-auto `type=game` receipt, local QA, and Checker GUI/install evidence. No Store submission, merge, force push or main/release changes.
+- Verification: previous PR #8 CI run `40459705194` passed; the two new commits require fresh CI confirmation before being called PASS.
