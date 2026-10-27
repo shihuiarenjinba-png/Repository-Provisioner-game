@@ -292,3 +292,19 @@ Sprint EXE remains pinned to SHA-256
 `e8517df8cd31a40e5ce72afdd4e6a4d63626fb99f7ff8a4fa3296ff8deef05f4`
 and 11,387,518 bytes. A changed/missing result or EXE is `CONFLICT`; the
 resume input never authorizes a Store submission or bypasses official Identity.
+
+
+## 2026-10-27 21:12 JST — verified_at CAS correlation hardening
+
+- **active_product**: `signal-sprint`; **new_product_allowed**: `false`. No new GAME candidate.
+- **phase**: `LOCAL_CHECK_ONLY_REPORTED__PARTNER_CENTER_IDENTITY_HOLD` (Windows-all-auto `ops/active_e2e_handoff.json`, updated 2026-10-27T11:41:25.588Z).
+- **last_completed_step**: pinned unsigned Windows EXE built/inspected; local Identity worker check-only reported HOLD without GitHub CAS.
+- **request_id**: `game-signal-sprint-c058cbf7fe38e02d929c67d047d717ff74bd522e`.
+- **source_repository / source_branch / immutable source_sha**: `shihuiarenjinba-png/AI-Game-Factory` / `codex/game-signal-sprint-undo-20261027` / `c058cbf7fe38e02d929c67d047d717ff74bd522e`. The Factory branch HEAD was re-read and still matches.
+- **resume_repository / resume_branch**: `shihuiarenjinba-png/Repository-Provisioner-game` / `codex/game-identity-idempotency-20261027`. Timestamp-correlation code commits: `398103d7`, `4f72d97b`, `f1eb51d6`; fixture correction `e35551b6`. Re-read latest HEAD before use.
+- **fix**: approved Identity CAS payload now records the operator export's `verified_at`, and existing-Identity replay requires exact `verified_at` equality; altered or missing verification timestamps cannot silently reuse the same approved file. Tests cover changed/missing timestamp and exact CAS payload.
+- **CI**: new-head workflow status must be checked at `https://github.com/shihuiarenjinba-png/Repository-Provisioner-game/actions`; earlier intermediate run `40501831559` failed because one historical test fixture lacked `verified_at`. Fixture corrected on `e35551b6`. Do not claim final CI PASS until a run for the final HEAD succeeds.
+- **Artifact**: Factory EXE workflow `40443340158`, artifact ID `12706862577`, ZIP SHA-256 `e48a0426595dc227988f12944921511a47d5c8feca8b063a161dd0dd61306412`; locally inspected EXE SHA-256 `e8517df8cd31a40e5ce72afdd4e6a4d63626fb99f7ff8a4fa3296ff8deef05f4`. No real MSIX or intake receipt.
+- **blocked_by**: authenticated official Partner Center Identity evidence, explicit approval to apply CAS, post-CAS Factory safety/handoff integration, real MSIX, local QA and Windows-checker.
+- **factory_return_commit_sha / factory_build_head_sha / real_msix_sha256 / windows_all_auto_receipt**: all `null` until real evidence.
+- **next_action**: run the reviewed local Identity worker check-only against the latest `Windows-all-auto/codex/local-identity-qa-safety-20261027` ledger and this Provisioner branch; acquire authenticated official Identity privately, then verify Factory source HEAD equals `c058cbf7...` immediately before explicitly approved CAS. If changed, CONFLICT. Only after CAS, integrate Factory safety PR #7 and handoff PR #11 on a dedicated build branch, build real MSIX and verify payload/receipt/GUI QA. No main/release edits, merge, force push or Store submission.
