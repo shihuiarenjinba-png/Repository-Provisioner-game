@@ -512,12 +512,33 @@ def inspect_package(path: Path) -> dict[str, Any]:
         identity = next((element for element in root.iter() if element.tag.rsplit("}", 1)[-1] == "Identity"), None)
         if identity is None:
             raise HoldError("MSIX manifest has no Identity element")
+        # A stray helper.exe does not make a GAME package launchable. Bind
+        # every manifest-declared Application executable to an actual payload.
+        # MSIX manifests may use Windows backslashes while ZIP uses '/'.
+        declared_executables = []
+        for element in root.iter():
+            if element.tag.rsplit("}", 1)[-1] != "Application":
+                continue
+            executable = element.attrib.get("Executable")
+            if not isinstance(executable, str) or not executable:
+                continue
+            normalized = executable.replace("\\", "/")
+            if (normalized.startswith("/") or ":" in normalized.split("/")[0]
+                    or any(part in {"", ".", ".."} for part in normalized.split("/"))):
+                raise HoldError("MSIX manifest declares an unsafe executable path")
+            declared_executables.append(normalized.casefold())
+        payload_files = {member.filename.casefold() for member in members if not member.is_dir()}
+        manifest_executable_present = bool(declared_executables) and all(
+            name.endswith(".exe") and name in payload_files
+            for name in declared_executables
+        )
         name, publisher, version = (identity.attrib.get(key) for key in ("Name", "Publisher", "Version"))
         if not name or not publisher or not version:
             raise HoldError("MSIX Identity is incomplete")
         family = _package_family_name(name, publisher)
         result.update(package_identity=name, publisher=publisher, version=version,
                       package_family_name=family, has_executable=has_executable,
+                      manifest_executable_present=manifest_executable_present,
                       package_sid=_windows_package_sid(family) if family else None)
         return result
     except (zipfile.BadZipFile, ET.ParseError, KeyError, RuntimeError, EOFError, OSError) as exc:
@@ -791,8 +812,9 @@ class Provisioner:
                     source_dir = self.source.acquire(job, root / "source")
                     package = inspect_package(self.builder.build(job, source_dir, root / "artifacts", self.config))
                     if (self.config.product_type == "GAME" and package["kind"] in {"msix", "appx"}
-                            and not package.get("has_executable")):
-                        raise HoldError("GAME MSIX contains no executable payload")
+                            and not (package.get("has_executable")
+                                     and package.get("manifest_executable_present"))):
+                        raise HoldError("GAME MSIX lacks a manifest-bound executable payload")
                     # Signal Sprint currently produces a real unsigned EXE.
                     # The official Identity must be returned BEFORE the Factory
                     # can create an MSIX. Preserve the EXE SHA as a HOLD stage,
