@@ -557,7 +557,7 @@ class OrchestratorTests(unittest.TestCase):
             result = self.runner(tmp, builder=MissingExeBuilder(), identity=identity, github=github).run(
                 job(), apply=True)
         self.assertEqual(result["status"], "HOLD")
-        self.assertIn("no executable payload", result["errors"][0])
+        self.assertIn("manifest-bound executable payload", result["errors"][0])
         self.assertEqual((identity.calls, github.calls), (0, 0))
 
     def test_exe_only_build_is_hold(self):
