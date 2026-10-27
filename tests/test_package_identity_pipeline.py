@@ -300,6 +300,15 @@ class IdentityEvidenceTests(unittest.TestCase):
             path.write_text(json.dumps(evidence()), encoding="utf-8")
             result = OfficialIdentityProvider(path).lookup(Job.validate(job(), config()))
         self.assertEqual(result["store_id"], "9N1234567890")
+    def test_duplicate_official_identity_source_sha_is_hold(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "identity.json"
+            # The first SHA conflicts; the second would win under json.loads.
+            duplicate = '{"source_sha":"' + "b" * 40 + '",' + json.dumps(evidence())[1:]
+            path.write_text(duplicate, encoding="utf-8")
+            with self.assertRaisesRegex(HoldError, "Duplicate JSON key"):
+                OfficialIdentityProvider(path).lookup(Job.validate(job(), config()))
+
     def test_untrusted_evidence_url_is_hold(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "identity.json"
@@ -405,6 +414,11 @@ class GitHubReturnTests(unittest.TestCase):
                 self.assertFalse(GitHubReturnClient._existing_matches(
                     wrapped({k: v for k, v in approved.items() if k != missing}), official, selected_job, package))
         self.assertFalse(GitHubReturnClient._existing_matches(wrapped([]), official, selected_job, package))
+        duplicate = '{"source_sha":"' + "b" * 40 + '",' + json.dumps(approved)[1:]
+        duplicate_item = {"encoding": "base64", "content": base64.b64encode(
+            duplicate.encode("utf-8")).decode("ascii")}
+        self.assertFalse(GitHubReturnClient._existing_matches(
+            duplicate_item, official, selected_job, package))
 
     def test_existing_identity_reports_branch_commit_not_blob_sha(self):
         official = evidence()

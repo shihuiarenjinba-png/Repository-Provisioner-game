@@ -88,14 +88,24 @@ def redact(text: str) -> str:
     return result[:4000]
 
 
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Reject ambiguous duplicate keys in operator evidence and local state."""
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("Duplicate JSON key")
+        result[key] = value
+    return result
+
+
 def load_json(path: Path, max_bytes: int = 65_536) -> dict[str, Any]:
     if not path.is_file():
         raise HoldError(f"JSON file not found: {path}")
     if path.stat().st_size > max_bytes:
         raise HoldError(f"JSON file exceeds {max_bytes} bytes")
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        value = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_unique_json_object)
+    except (OSError, UnicodeError, ValueError) as exc:
         raise HoldError(f"Invalid JSON: {exc}") from exc
     if not isinstance(value, dict):
         raise HoldError("JSON root must be an object")
@@ -701,7 +711,8 @@ class GitHubReturnClient:
         if not isinstance(existing, dict) or existing.get("encoding") != "base64":
             return False
         try:
-            content = json.loads(base64.b64decode(existing["content"], validate=True))
+            content = json.loads(base64.b64decode(existing["content"], validate=True),
+                                 object_pairs_hook=_unique_json_object)
         except (KeyError, ValueError, TypeError, json.JSONDecodeError):
             return False
         expected = {
