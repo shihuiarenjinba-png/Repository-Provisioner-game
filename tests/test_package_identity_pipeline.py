@@ -744,6 +744,23 @@ class OrchestratorTests(unittest.TestCase):
             self.assertIn(config().product_type.lower(), str(runner.ledger.records))
 
 
+class MachineReadableErrorContractTests(unittest.TestCase):
+    def test_invalid_field_types_still_produce_schema_compatible_hold(self):
+        # The scheduler must parse a failed job without arbitrary JSON types
+        # in the result-v1.0 string-or-null correlation fields.
+        malformed = job(source_factory=17, source_repository=[],
+                        source_branch=42, source_sha={}, slug=False)
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Provisioner(config(), Path(tmp) / "state",
+                                 Path(tmp) / "work").run(malformed)
+        self.assertEqual(result["status"], "HOLD")
+        for field in ("source_factory", "source_repository", "source_branch",
+                      "source_sha", "slug"):
+            self.assertIsNone(result[field], field)
+        self.assertEqual(result["github_return"]["status"], "NOT_APPLIED")
+        self.assertEqual(result["package"]["status"], "NOT_BUILT")
+
+
 class FailureClassificationTests(unittest.TestCase):
     def test_git_timeout_is_retryable(self):
         with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(["git"], 1)):
