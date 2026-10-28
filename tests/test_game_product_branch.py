@@ -82,7 +82,8 @@ class IndependentGameBranchTests(unittest.TestCase):
                     "package_family_name": "Test.Game_abcdefghijklm",
                     "package_sid": "S-1-15-2-1-2-3-4-5-6-7",
                     "authenticated_account": "test-only",
-                    "official_evidence_url": "https://partner.microsoft.com/test"}
+                    "official_evidence_url": "https://partner.microsoft.com/test",
+                    "verified_at": "2026-10-26T00:00:00Z"}
         package = {"sha256": "d" * 64, "signature_status": "NOTSIGNED",
                    "package_family_name": official["package_family_name"],
                    "package_sid": official["package_sid"]}

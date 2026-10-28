@@ -390,13 +390,14 @@ class GitHubReturnTests(unittest.TestCase):
         self.assertEqual(approved["slug"], selected_job.slug)
         self.assertEqual(approved["request_id"], selected_job.request_id)
         self.assertEqual(approved["source_sha"], selected_job.source_sha)
+        self.assertEqual(approved["verified_at"], evidence()["verified_at"])
 
     def test_existing_identity_reuse_requires_verified_provenance(self):
         official = evidence()
         selected_job = Job.validate(job(), config())
         package = package_result()
         approved = {
-            "reviewed": True, "source": "partner_center",
+            "schema_version": "1.0", "reviewed": True, "source": "partner_center",
             **{k: official[k] for k in ("store_id", "name", "publisher", "version",
                                         "package_family_name", "package_sid")},
             "request_id": selected_job.request_id, "product_type": selected_job.product_type,
@@ -407,6 +408,7 @@ class GitHubReturnTests(unittest.TestCase):
             "signature_status": package["signature_status"],
             "verified_by": official["authenticated_account"],
             "evidence_url": official["official_evidence_url"],
+            "verified_at": official["verified_at"],
         }
         def wrapped(obj):
             return {"encoding": "base64", "content": base64.b64encode(
@@ -414,7 +416,9 @@ class GitHubReturnTests(unittest.TestCase):
         self.assertTrue(GitHubReturnClient._existing_matches(wrapped(approved), official, selected_job, package))
         for changes in ({"reviewed": 1}, {"reviewed": False}, {"source": "unverified"},
                         {"verified_by": "wrong-user"}, {"evidence_url": "https://evil.invalid"},
-                        {"store_id": "9N0000000000"}, {"slug": "another-game"}):
+                        {"verified_at": "2000-01-01T00:00:00Z"},
+                        {"store_id": "9N0000000000"}, {"slug": "another-game"},
+                        {"schema_version": "0.9"}):
             with self.subTest(changes=changes):
                 self.assertFalse(GitHubReturnClient._existing_matches(
                     wrapped({**approved, **changes}), official, selected_job, package))
@@ -422,6 +426,8 @@ class GitHubReturnTests(unittest.TestCase):
             with self.subTest(missing=missing):
                 self.assertFalse(GitHubReturnClient._existing_matches(
                     wrapped({k: v for k, v in approved.items() if k != missing}), official, selected_job, package))
+        self.assertFalse(GitHubReturnClient._existing_matches(
+            wrapped({**approved, "unreviewed_extra": "value"}), official, selected_job, package))
         self.assertFalse(GitHubReturnClient._existing_matches(wrapped([]), official, selected_job, package))
         duplicate = '{"source_sha":"' + "b" * 40 + '",' + json.dumps(approved)[1:]
         duplicate_item = {"encoding": "base64", "content": base64.b64encode(
@@ -434,7 +440,7 @@ class GitHubReturnTests(unittest.TestCase):
         selected_job = Job.validate(job(), config())
         package = package_result()
         approved = {
-            "reviewed": True, "source": "partner_center",
+            "schema_version": "1.0", "reviewed": True, "source": "partner_center",
             **{k: official[k] for k in ("store_id", "name", "publisher", "version",
                                         "package_family_name", "package_sid")},
             "request_id": selected_job.request_id, "product_type": selected_job.product_type,
@@ -445,6 +451,7 @@ class GitHubReturnTests(unittest.TestCase):
             "signature_status": package["signature_status"],
             "verified_by": official["authenticated_account"],
             "evidence_url": official["official_evidence_url"],
+            "verified_at": official["verified_at"],
         }
         def fake_api(endpoint, body=None, allow_missing=False):
             if "git/ref/heads/" in endpoint:
@@ -513,6 +520,90 @@ class OrchestratorTests(unittest.TestCase):
         return Provisioner(config(), Path(root) / "state", Path(root) / "work",
                            source=source or FakeSource(), builder=builder or FakeBuilder(),
                            identity=identity or FakeIdentity(), github=github or FakeGitHub())
+
+    def resume_fixture(self, root):
+        builder = FakeBuilder(artifact_kind="exe")
+        package_path = builder.build(Job.validate(job(), config()), Path(root), Path(root) / "prior", config())
+        package = inspect_package(package_path)
+        result = {
+            "schema_version": "1.0", "request_id": "req-0001",
+            "product_type": config().product_type, "source_factory": config().source_factory,
+            "source_repository": config().source_repository,
+            "source_branch": config().source_branch, "source_sha": SHA,
+            "slug": "sample-product", "status": "HOLD",
+            "package": package,
+            "official_identity": {"status": "UNVERIFIED", "store_id": None},
+            "github_return": {"status": "NOT_APPLIED", "commit_sha": None},
+            "next_stage": "OBTAIN_AUTHENTICATED_OFFICIAL_IDENTITY",
+        }
+        path = Path(root) / "prior-result.json"
+        path.write_text(json.dumps(result), encoding="utf-8")
+        return path, package
+
+    def test_resume_result_reinspects_exact_exe_without_rebuild(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            resume, package = self.resume_fixture(tmp)
+            source, builder = FakeSource(), FakeBuilder(artifact_kind="exe")
+            runner = Provisioner(config(), Path(tmp) / "state", Path(tmp) / "work",
+                                 source=source, builder=builder,
+                                 identity=FakeIdentity(error=HoldError("no identity")),
+                                 github=FakeGitHub(), resume_result=resume)
+            result = runner.run(job(), apply=False)
+            self.assertEqual(result["next_stage"], "OBTAIN_AUTHENTICATED_OFFICIAL_IDENTITY")
+            self.assertEqual(result["package"]["sha256"], package["sha256"])
+            self.assertEqual(source.calls, 0)
+            self.assertEqual(builder.calls, 0)
+
+    def test_resume_result_rejects_malformed_status_objects_without_rebuild(self):
+        for field, invalid in (("github_return", ["NOT_APPLIED"]),
+                               ("official_identity", "UNVERIFIED")):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as tmp:
+                resume, _ = self.resume_fixture(tmp)
+                previous = json.loads(resume.read_text(encoding="utf-8"))
+                previous[field] = invalid
+                resume.write_text(json.dumps(previous), encoding="utf-8")
+                source, builder = FakeSource(), FakeBuilder(artifact_kind="exe")
+                runner = Provisioner(config(), Path(tmp) / "state", Path(tmp) / "work",
+                                     source=source, builder=builder,
+                                     identity=FakeIdentity(), github=FakeGitHub(),
+                                     resume_result=resume)
+                result = runner.run(job(), apply=False)
+                self.assertEqual(result["status"], "CONFLICT")
+                self.assertEqual(result["next_stage"], "RECONCILE_CONFLICT")
+                self.assertEqual(source.calls, 0)
+                self.assertEqual(builder.calls, 0)
+
+    def test_resume_result_rejects_nonabsolute_or_nonstr_path_before_build(self):
+        # A scheduler must not reinterpret a relative path in its own cwd,
+        # or coerce a malformed path to a string, when resuming pinned bytes.
+        for bad_path in ("SignalSprint.exe", 42, [], None, "bad\x00path.exe"):
+            with self.subTest(path=repr(bad_path)), tempfile.TemporaryDirectory() as tmp:
+                resume, _ = self.resume_fixture(tmp)
+                previous = json.loads(resume.read_text(encoding="utf-8"))
+                previous["package"]["path"] = bad_path
+                resume.write_text(json.dumps(previous), encoding="utf-8")
+                source, builder, github = FakeSource(), FakeBuilder(artifact_kind="exe"), FakeGitHub()
+                runner = Provisioner(config(), Path(tmp) / "state", Path(tmp) / "work",
+                                     source=source, builder=builder, identity=FakeIdentity(),
+                                     github=github, resume_result=resume)
+                result = runner.run(job(), apply=True)
+                self.assertEqual(result["status"], "CONFLICT")
+                self.assertEqual(result["next_stage"], "RECONCILE_CONFLICT")
+                self.assertEqual((source.calls, builder.calls, github.calls), (0, 0, 0))
+
+    def test_resume_result_can_reach_existing_github_cas_client(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            resume, package = self.resume_fixture(tmp)
+            source, builder, github = FakeSource(), FakeBuilder(artifact_kind="exe"), FakeGitHub()
+            runner = Provisioner(config(), Path(tmp) / "state", Path(tmp) / "work",
+                                 source=source, builder=builder, identity=FakeIdentity(),
+                                 github=github, resume_result=resume)
+            result = runner.run(job(), apply=False)
+            self.assertEqual(result["next_stage"], "APPLY_VERIFIED_GITHUB_RETURN")
+            self.assertEqual(result["package"]["sha256"], package["sha256"])
+            self.assertEqual(github.calls, 1)
+            self.assertEqual(source.calls, 0)
+            self.assertEqual(builder.calls, 0)
 
     def test_dry_run_has_no_external_side_effect(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -691,6 +782,23 @@ class OrchestratorTests(unittest.TestCase):
             runner = self.runner(tmp)
             runner.run(job(dry_run=True), apply=False)
             self.assertIn(config().product_type.lower(), str(runner.ledger.records))
+
+
+class MachineReadableErrorContractTests(unittest.TestCase):
+    def test_invalid_field_types_still_produce_schema_compatible_hold(self):
+        # The scheduler must parse a failed job without arbitrary JSON types
+        # in the result-v1.0 string-or-null correlation fields.
+        malformed = job(source_factory=17, source_repository=[],
+                        source_branch=42, source_sha={}, slug=False)
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Provisioner(config(), Path(tmp) / "state",
+                                 Path(tmp) / "work").run(malformed)
+        self.assertEqual(result["status"], "HOLD")
+        for field in ("source_factory", "source_repository", "source_branch",
+                      "source_sha", "slug"):
+            self.assertIsNone(result[field], field)
+        self.assertEqual(result["github_return"]["status"], "NOT_APPLIED")
+        self.assertEqual(result["package"]["status"], "NOT_BUILT")
 
 
 class FailureClassificationTests(unittest.TestCase):

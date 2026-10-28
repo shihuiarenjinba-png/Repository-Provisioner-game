@@ -644,14 +644,21 @@ class GitHubReturnClient:
         if not apply:
             return proposal
         ref = self.api(base + "git/ref/heads/" + job.source_branch)
-        if not isinstance(ref, dict) or ref.get("object", {}).get("sha") != job.source_sha:
-            raise ConflictError("Factory HEAD changed before identity return")
+        head_sha = ref.get("object", {}).get("sha") if isinstance(ref, dict) else None
+        if not isinstance(head_sha, str) or not SHA40.fullmatch(head_sha):
+            raise RetryableError("Factory HEAD could not be verified before identity return")
         self._verify_product(base, job, config)
         existing = self.api(base + "contents/" + target_path + "?ref=" + quote(job.source_branch, safe=""), allow_missing=True)
         if existing is not None:
             if self._existing_matches(existing, official, job, package):
-                return {**proposal, "status": "EXISTING_VERIFIED", "commit_sha": ref["object"]["sha"]}
+                # A successful atomic return advances the source branch.  A
+                # retry after an ambiguous API response must therefore inspect
+                # the existing immutable payload before comparing HEAD with the
+                # original source SHA.  This is read-only and never overwrites.
+                return {**proposal, "status": "EXISTING_VERIFIED", "commit_sha": head_sha}
             raise ConflictError("approved-identity.json already exists and will not be overwritten")
+        if head_sha != job.source_sha:
+            raise ConflictError("Factory HEAD changed before identity return")
         approved = {"schema_version": SCHEMA_VERSION, "reviewed": True, "source": "partner_center",
                     "request_id": job.request_id, "product_type": job.product_type,
                     "slug": job.slug,
@@ -661,7 +668,8 @@ class GitHubReturnClient:
                     "package_family_name": official["package_family_name"], "package_sid": official["package_sid"],
                     "signature_status": package["signature_status"], "store_id": official["store_id"],
                     "name": official["name"], "publisher": official["publisher"], "version": official["version"],
-                    "verified_by": official["authenticated_account"], "evidence_url": official["official_evidence_url"]}
+                    "verified_by": official["authenticated_account"], "evidence_url": official["official_evidence_url"],
+                    "verified_at": official["verified_at"]}
         content = json.dumps(approved, ensure_ascii=False, indent=2) + "\n"
         body = {"query": self.MUTATION, "variables": {"input": {
             "branch": {"repositoryNameWithOwner": config.source_repository, "branchName": job.source_branch},
@@ -727,11 +735,13 @@ class GitHubReturnClient:
         except (KeyError, ValueError, TypeError, json.JSONDecodeError):
             return False
         expected = {
+            "schema_version": SCHEMA_VERSION,
             "reviewed": True,
             "source": "partner_center",
             **{key: official[key] for key in ("store_id", "name", "publisher", "version")},
             "verified_by": official["authenticated_account"],
             "evidence_url": official["official_evidence_url"],
+            "verified_at": official["verified_at"],
             "request_id": job.request_id,
             "product_type": job.product_type,
             "slug": job.slug,
@@ -745,7 +755,7 @@ class GitHubReturnClient:
             "package_sid": official["package_sid"],
             "signature_status": package["signature_status"],
         }
-        return isinstance(content, dict) and all(
+        return isinstance(content, dict) and set(content) == set(expected) and all(
             type(content.get(key)) is type(value) and content.get(key) == value
             for key, value in expected.items()
         )
@@ -784,12 +794,59 @@ class GitHubReturnClient:
 class Provisioner:
     def __init__(self, config: ProductConfig, state_dir: Path, work_dir: Path,
                  source: SourceManager | None = None, builder: PackageBuilder | None = None,
-                 identity: OfficialIdentityProvider | None = None, github: GitHubReturnClient | None = None):
+                 identity: OfficialIdentityProvider | None = None, github: GitHubReturnClient | None = None,
+                 resume_result: Path | None = None):
         self.config = config
         self.ledger = Ledger(state_dir / config.product_type.lower())
         self.work_dir = work_dir / config.product_type.lower()
         self.source, self.builder = source or SourceManager(), builder or PackageBuilder()
         self.identity, self.github = identity or OfficialIdentityProvider(None), github or GitHubReturnClient()
+        self.resume_result = resume_result
+
+    def _resume_package(self, job: Job) -> dict[str, Any] | None:
+        """Re-inspect one prior Provisioner EXE result without rebuilding bytes."""
+        if self.resume_result is None:
+            return None
+        try:
+            raw = load_json(self.resume_result, 262_144)
+        except HoldError as exc:
+            raise ConflictError("Pinned GAME resume result is missing or invalid") from exc
+        expected = {
+            "request_id": job.request_id, "product_type": job.product_type,
+            "source_factory": job.source_factory, "source_repository": job.source_repository,
+            "source_branch": job.source_branch, "source_sha": job.source_sha, "slug": job.slug,
+            "status": "HOLD", "next_stage": "OBTAIN_AUTHENTICATED_OFFICIAL_IDENTITY",
+        }
+        if any(raw.get(key) != value for key, value in expected.items()):
+            raise ConflictError("Resume result belongs to another request, source or stage")
+        github_return = raw.get("github_return")
+        official_identity = raw.get("official_identity")
+        if (self.config.product_type != "GAME"
+                or not isinstance(github_return, dict)
+                or not isinstance(official_identity, dict)
+                or github_return.get("status") != "NOT_APPLIED"
+                or official_identity.get("status") != "UNVERIFIED"):
+            raise ConflictError("Resume result is not a pre-Identity GAME EXE hold")
+        previous = raw.get("package")
+        if not isinstance(previous, dict) or previous.get("kind") != "exe":
+            raise ConflictError("Resume result has no verified GAME EXE")
+        raw_path = previous.get("path")
+        if (not isinstance(raw_path, str) or not raw_path
+                or "\x00" in raw_path or not Path(raw_path).is_absolute()):
+            raise ConflictError("Resume result must pin an absolute local EXE path")
+        path = Path(raw_path)
+        try:
+            inspected = inspect_package(path)
+            verify_game_windows_exe(path)
+        except (HoldError, OSError) as exc:
+            # A missing/corrupt previously inspected EXE is a provenance
+            # conflict.  Returning HOLD here would overwrite the pinned
+            # ledger with NOT_BUILT and permit an unsafe later rebuild.
+            raise ConflictError("Previously pinned GAME EXE is missing or invalid") from exc
+        for key in ("kind", "sha256", "size_bytes", "signature_status"):
+            if inspected.get(key) != previous.get(key):
+                raise ConflictError("Resume EXE bytes or inspection metadata changed")
+        return inspected
 
     def run(self, raw: dict[str, Any], apply: bool = False) -> dict[str, Any]:
         started = utc_now()
@@ -833,8 +890,28 @@ class Provisioner:
                     return response
                 try:
                     root = self.work_dir / hashlib.sha256(job.request_id.encode()).hexdigest()[:16]
-                    source_dir = self.source.acquire(job, root / "source")
-                    package = inspect_package(self.builder.build(job, source_dir, root / "artifacts", self.config))
+                    # A previous GAME EXE HOLD pins real bytes in the ledger.
+                    # Never silently rebuild on an Identity retry, or accept a
+                    # modified --resume-result that self-consistently rewrites
+                    # its own hash while changing the previously inspected EXE.
+                    pinned = prior_response.get("package") if (
+                        self.config.product_type == "GAME" and prior_status == "HOLD"
+                        and isinstance(prior_response.get("package"), dict)
+                        and prior_response["package"].get("kind") == "exe"
+                    ) else None
+                    if pinned is not None and self.resume_result is None:
+                        raise ConflictError("Pinned GAME EXE retry requires --resume-result; do not rebuild")
+                    package = self._resume_package(job)
+                    if pinned is not None and (
+                        package is None or any(
+                            package.get(key) != pinned.get(key)
+                            for key in ("kind", "sha256", "size_bytes", "signature_status")
+                        )
+                    ):
+                        raise ConflictError("Resume EXE differs from previously pinned ledger evidence")
+                    if package is None:
+                        source_dir = self.source.acquire(job, root / "source")
+                        package = inspect_package(self.builder.build(job, source_dir, root / "artifacts", self.config))
                     if (self.config.product_type == "GAME" and package["kind"] in {"msix", "appx"}
                             and not (package.get("has_executable")
                                      and package.get("manifest_executable_present"))):
@@ -889,6 +966,15 @@ class Provisioner:
                         response["errors"] = ["Identity verified locally but GitHub return was not applied; rerun with --apply after review"]
                     self._save(job, response, {"stage": returned["status"], "package_sha256": package["sha256"]})
                     return response
+                except ConflictError as exc:
+                    # Invalid retries must not replace the original request
+                    # binding, EXE hash, or pending Identity checkpoint.
+                    if previous is not None:
+                        response = self._base_response(job, "CONFLICT", started)
+                        response["errors"] = [redact(str(exc))]
+                        response["next_stage"] = exc.next_stage
+                        return response
+                    return self._record_error(job, exc, started, previous)
                 except ProvisionerError as exc:
                     return self._record_error(job, exc, started, previous)
                 except Exception as exc:
@@ -917,9 +1003,12 @@ class Provisioner:
         return {"schema_version": SCHEMA_VERSION,
                 "request_id": raw.get("request_id") if isinstance(raw.get("request_id"), str) else None,
                 "product_type": raw.get("product_type") if isinstance(raw.get("product_type"), str) else self.config.product_type,
-                "status": exc.status, "source_factory": raw.get("source_factory"),
-                "source_repository": raw.get("source_repository"), "source_branch": raw.get("source_branch"),
-                "source_sha": raw.get("source_sha"), "slug": raw.get("slug"),
+                "status": exc.status,
+                "source_factory": raw.get("source_factory") if isinstance(raw.get("source_factory"), str) else None,
+                "source_repository": raw.get("source_repository") if isinstance(raw.get("source_repository"), str) else None,
+                "source_branch": raw.get("source_branch") if isinstance(raw.get("source_branch"), str) else None,
+                "source_sha": raw.get("source_sha") if isinstance(raw.get("source_sha"), str) else None,
+                "slug": raw.get("slug") if isinstance(raw.get("slug"), str) else None,
                 "package": {"status": "NOT_BUILT", "sha256": None},
                 "official_identity": {"status": "UNVERIFIED", "store_id": None},
                 "github_return": {"status": "NOT_APPLIED", "commit_sha": None},
@@ -944,6 +1033,19 @@ def write_json(path: Path, value: dict[str, Any]) -> None:
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def _startup_error_response(status: str, errors: list[str], started: str,
+                            next_stage: str) -> dict[str, Any]:
+    """Keep CLI startup failures valid for the machine-readable result contract."""
+    return {"schema_version": SCHEMA_VERSION, "request_id": None, "product_type": None,
+            "source_factory": None, "source_repository": None, "source_branch": None,
+            "source_sha": None, "slug": None, "status": status,
+            "package": {"status": "NOT_BUILT", "sha256": None},
+            "official_identity": {"status": "UNVERIFIED", "store_id": None},
+            "github_return": {"status": "NOT_APPLIED", "commit_sha": None},
+            "windows_all_auto_record": None, "errors": errors, "next_stage": next_stage,
+            "started_at": started, "finished_at": utc_now(), "idempotent_replay": False}
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build/inspect a pinned Factory product and return verified Store Identity")
     parser.add_argument("--input", required=True, type=Path)
@@ -953,20 +1055,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--work-dir", type=Path, default=Path(".provisioner-work"))
     parser.add_argument("--official-identity", type=Path,
                         help="Operator export from an authenticated Partner Center session; never source-controlled")
+    parser.add_argument("--resume-result", type=Path,
+                        help="Prior pre-Identity Provisioner result whose exact local EXE will be re-inspected")
     parser.add_argument("--apply", action="store_true", help="Atomically write to the configured Factory work branch")
     args = parser.parse_args(argv)
     started = utc_now()
     try:
         config, raw = ProductConfig.load(args.config), load_json(args.input)
         result = Provisioner(config, args.state_dir, args.work_dir,
-                             identity=OfficialIdentityProvider(args.official_identity)).run(raw, apply=args.apply)
+                             identity=OfficialIdentityProvider(args.official_identity),
+                             resume_result=args.resume_result).run(raw, apply=args.apply)
     except ProvisionerError as exc:
-        result = {"schema_version": SCHEMA_VERSION, "request_id": None, "product_type": None,
-                  "status": exc.status, "errors": [redact(str(exc))], "started_at": started, "finished_at": utc_now()}
+        result = _startup_error_response(exc.status, [redact(str(exc))], started, exc.next_stage)
     except Exception as exc:
-        result = {"schema_version": SCHEMA_VERSION, "request_id": None, "product_type": None,
-                  "status": "FAILED", "errors": [f"Startup failure: {type(exc).__name__}"],
-                  "started_at": started, "finished_at": utc_now()}
+        result = _startup_error_response("FAILED", [f"Startup failure: {type(exc).__name__}"],
+                                         started, "FIX_INPUT_OR_IMPLEMENTATION")
     write_json(args.output, result)
     print(json.dumps({"request_id": result.get("request_id"), "status": result["status"], "output": str(args.output)}, ensure_ascii=False))
     return 0 if result["status"] in {"COMPLETED", "DRY_RUN"} else 2
