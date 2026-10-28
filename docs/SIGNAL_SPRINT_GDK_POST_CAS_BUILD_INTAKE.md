@@ -15,8 +15,8 @@ This is **only** for the existing Signal Sprint product. Do not generate another
 ## Preconditions
 
 1. Provisioner PR #10 check-only validates the reviewed GDK Identity and original pinned EXE.
-2. An explicitly approved Provisioner CAS returns `approved-identity.json` to the original Factory source branch. Do **not** run CAS merely because this script exists.
-3. Record the actual CAS commit SHA, not a guessed value. The CAS commit must have the immutable source SHA as its **direct parent**, and must change **only** `products/signal-sprint/store/approved-identity.json`.
+2. An explicitly approved Provisioner CAS creates an Identity-only commit on a **separate CAS branch** rooted at the pinned source SHA. The immutable source branch must remain exactly at `c058cbf7fe38e02d929c67d047d717ff74bd522e`. Do **not** run CAS merely because this script exists.
+3. Record the actual CAS commit SHA, not a guessed value. The CAS commit must have the immutable source SHA as its **only parent** (merge CAS is rejected), and must change **only** `products/signal-sprint/store/approved-identity.json`.
 4. Create a **separate** post-CAS GDK build branch at/after that CAS commit. Check it out locally. Do not re-run Factory source generation or rebuild the original EXE.
 
 ## Check-only command (after CAS)
@@ -29,13 +29,13 @@ python gdk_build_intake.py \
   --build-head-sha ACTUAL_40_HEX_BUILD_BRANCH_HEAD
 ```
 
-This script performs **no GitHub writes, package builds, Store submissions or Identity retrieval**. It verifies the checked-out Git HEAD, CAS parent, ancestry, single-file CAS change, approved Identity at CAS and build HEAD, and exact ZIP/EXE SHA, CRC, provenance and request ID. It emits a machine-readable JSON result with `status=GDK_BUILD_INPUT_CHECK_ONLY`, `next_stage=BUILD_GDK_MSIXVC_FROM_PINNED_EXE`, separate `source_sha`, `cas_commit_sha`, `factory_head_sha`, and `package_version=null`.
+This script performs **no GitHub writes, package builds, Store submissions or Identity retrieval**. It verifies the checked-out Git HEAD, the **live immutable source branch ref**, exact single-parent CAS ancestry, single-file CAS change, approved Identity at CAS and build HEAD, original `QA_UNSIGNED` signature provenance, and exact ZIP/EXE SHA, CRC, provenance and request ID. The checkout must contain the named immutable source ref; a shallow checkout without it fails closed. It emits a machine-readable JSON result with `status=GDK_BUILD_INPUT_CHECK_ONLY`, `next_stage=BUILD_GDK_MSIXVC_FROM_PINNED_EXE`, separate `source_sha`, `cas_commit_sha`, `factory_head_sha`, and `package_version=null`.
 
 The returned JSON is **not** a Windows-all-auto QA receipt and is **not** a real MSIXVC. The Windows/GDK builder must separately choose a reviewed package version, use the pinned executable bytes, produce a real MSIXVC/MSIXVC2, validate its package contents and launch path, and only then hand off the actual package hash to the Windows-all-auto owner (36-minute lane). No central queue or ledger is edited here.
 
 ## Remaining blockers
 
 - Actual Signal Sprint CAS return has not been performed.
-- Factory PR #11 remains generic MSIX-only; GDK build/handoff must not be routed through it unchanged.
+- Factory's separate GDK post-CAS gate (stacked Draft PR #13/#14) must also pass on the **same** dedicated build checkout, using branch format `codex/game-signal-sprint-gdk-build-*`. The generic MSIX workflow is not the GDK build path.
 - No real GDK MSIXVC/MSIXVC2, install test, GUI QA or Store approval has been demonstrated.
 - CI green validates this contract, not product E2E.
