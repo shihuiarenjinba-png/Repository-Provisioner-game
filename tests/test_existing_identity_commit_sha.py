@@ -39,7 +39,7 @@ class ExistingIdentityCommitTests(unittest.TestCase):
                    "package_family_name": official["package_family_name"],
                    "package_sid": official["package_sid"]}
         approved = {
-            "reviewed": True, "source": "partner_center",
+            "schema_version": "1.0", "reviewed": True, "source": "partner_center",
             **{key: official[key] for key in ("store_id", "name", "publisher", "version",
                                               "package_family_name", "package_sid")},
             "request_id": raw["request_id"], "product_type": raw["product_type"],
@@ -164,7 +164,7 @@ class ExistingIdentityCommitTests(unittest.TestCase):
                    "package_family_name": official["package_family_name"],
                    "package_sid": official["package_sid"]}
         approved = {
-            "reviewed": True, "source": "partner_center",
+            "schema_version": "1.0", "reviewed": True, "source": "partner_center",
             **{key: official[key] for key in ("store_id", "name", "publisher", "version",
                                               "package_family_name", "package_sid")},
             "request_id": checked_job.request_id, "product_type": checked_job.product_type,
@@ -189,6 +189,7 @@ class ExistingIdentityCommitTests(unittest.TestCase):
             {"evidence_url": "https://partner.microsoft.com/other-product"},
             {"verified_at": "2000-01-01T00:00:00Z"},
             {"store_id": "9N0000000000"}, {"slug": "another-game"},
+            {"schema_version": "0.9"},
         ):
             with self.subTest(changes=changes):
                 self.assertFalse(GitHubReturnClient._existing_matches(
@@ -197,6 +198,8 @@ class ExistingIdentityCommitTests(unittest.TestCase):
             with self.subTest(missing=missing):
                 self.assertFalse(GitHubReturnClient._existing_matches(
                     wrapped({k: v for k, v in approved.items() if k != missing}), official, checked_job, package))
+        self.assertFalse(GitHubReturnClient._existing_matches(
+            wrapped({**approved, "unreviewed_extra": "value"}), official, checked_job, package))
         self.assertFalse(GitHubReturnClient._existing_matches(wrapped([]), official, checked_job, package))
         self.assertFalse(GitHubReturnClient._existing_matches(
             {"encoding": "base64", "content": "not base64"}, official, checked_job, package))

@@ -735,6 +735,7 @@ class GitHubReturnClient:
         except (KeyError, ValueError, TypeError, json.JSONDecodeError):
             return False
         expected = {
+            "schema_version": SCHEMA_VERSION,
             "reviewed": True,
             "source": "partner_center",
             **{key: official[key] for key in ("store_id", "name", "publisher", "version")},
@@ -754,7 +755,7 @@ class GitHubReturnClient:
             "package_sid": official["package_sid"],
             "signature_status": package["signature_status"],
         }
-        return isinstance(content, dict) and all(
+        return isinstance(content, dict) and set(content) == set(expected) and all(
             type(content.get(key)) is type(value) and content.get(key) == value
             for key, value in expected.items()
         )

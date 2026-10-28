@@ -397,7 +397,7 @@ class GitHubReturnTests(unittest.TestCase):
         selected_job = Job.validate(job(), config())
         package = package_result()
         approved = {
-            "reviewed": True, "source": "partner_center",
+            "schema_version": "1.0", "reviewed": True, "source": "partner_center",
             **{k: official[k] for k in ("store_id", "name", "publisher", "version",
                                         "package_family_name", "package_sid")},
             "request_id": selected_job.request_id, "product_type": selected_job.product_type,
@@ -417,7 +417,8 @@ class GitHubReturnTests(unittest.TestCase):
         for changes in ({"reviewed": 1}, {"reviewed": False}, {"source": "unverified"},
                         {"verified_by": "wrong-user"}, {"evidence_url": "https://evil.invalid"},
                         {"verified_at": "2000-01-01T00:00:00Z"},
-                        {"store_id": "9N0000000000"}, {"slug": "another-game"}):
+                        {"store_id": "9N0000000000"}, {"slug": "another-game"},
+                        {"schema_version": "0.9"}):
             with self.subTest(changes=changes):
                 self.assertFalse(GitHubReturnClient._existing_matches(
                     wrapped({**approved, **changes}), official, selected_job, package))
@@ -425,6 +426,8 @@ class GitHubReturnTests(unittest.TestCase):
             with self.subTest(missing=missing):
                 self.assertFalse(GitHubReturnClient._existing_matches(
                     wrapped({k: v for k, v in approved.items() if k != missing}), official, selected_job, package))
+        self.assertFalse(GitHubReturnClient._existing_matches(
+            wrapped({**approved, "unreviewed_extra": "value"}), official, selected_job, package))
         self.assertFalse(GitHubReturnClient._existing_matches(wrapped([]), official, selected_job, package))
         duplicate = '{"source_sha":"' + "b" * 40 + '",' + json.dumps(approved)[1:]
         duplicate_item = {"encoding": "base64", "content": base64.b64encode(
@@ -437,7 +440,7 @@ class GitHubReturnTests(unittest.TestCase):
         selected_job = Job.validate(job(), config())
         package = package_result()
         approved = {
-            "reviewed": True, "source": "partner_center",
+            "schema_version": "1.0", "reviewed": True, "source": "partner_center",
             **{k: official[k] for k in ("store_id", "name", "publisher", "version",
                                         "package_family_name", "package_sid")},
             "request_id": selected_job.request_id, "product_type": selected_job.product_type,
