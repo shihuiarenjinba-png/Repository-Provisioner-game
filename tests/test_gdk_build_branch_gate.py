@@ -113,6 +113,27 @@ class GdkBuildBranchGateTests(unittest.TestCase):
         with self.assertRaisesRegex(ConflictError, "history touched"):
             self.check()
 
+    def test_merge_resolution_product_edit_then_revert_rejected(self):
+        # A merge resolution can edit product files even when side-branch
+        # commits do not. Include merge diffs in the full-history gate.
+        self.git("switch", "-qc", "synthetic-side", self.cas_sha)
+        (self.repo / "side.txt").write_text("side branch", encoding="utf-8")
+        self.git("add", ".")
+        self.git("commit", "-qm", "synthetic side branch")
+        self.git("switch", "-q", "codex/game-signal-sprint-gdk-build-20261028")
+        self.git("merge", "--no-commit", "--no-ff", "synthetic-side")
+        game = self.repo / "products" / "signal-sprint" / "game.txt"
+        game.write_text("merge-resolution product mutation", encoding="utf-8")
+        self.git("add", ".")
+        self.git("commit", "-qm", "synthetic merge resolution")
+        game.write_text("immutable game", encoding="utf-8")
+        self.git("add", ".")
+        self.git("commit", "-qm", "synthetic revert after merge")
+        self.assertEqual(self.git("diff", "--name-only", self.cas_sha,
+                                  "HEAD", "--", "products/signal-sprint"), "")
+        with self.assertRaisesRegex(ConflictError, "history touched"):
+            self.check()
+
     def test_non_product_build_history_remains_allowed(self):
         build_tool = self.repo / "tools" / "gdk-integration.txt"
         build_tool.write_text("new build integration", encoding="utf-8")
