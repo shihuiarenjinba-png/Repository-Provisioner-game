@@ -41,8 +41,10 @@ def verify_build_branch(factory_checkout: Path, cas_sha: str, build_sha: str) ->
     # A final-tree diff alone misses a source/Identity edit followed by a
     # revert in a later integration commit. Reject *any* intermediate product
     # path mutation after CAS, even when build HEAD has the original bytes.
-    product_history = _git(factory_checkout, "log", "--format=", "--name-only",
-                           cas_sha + ".." + build_sha, "--", "products/signal-sprint")
+    product_history = _git(factory_checkout, "log", "--full-history",
+                           "--diff-merges=separate", "--no-renames",
+                           "--format=", "--name-only", cas_sha + ".." + build_sha,
+                           "--", "products/signal-sprint")
     if product_history:
         raise ConflictError("GDK build branch history touched immutable Signal Sprint product tree")
 
