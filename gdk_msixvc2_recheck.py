@@ -59,6 +59,15 @@ def recheck(
     branch = verify_build_branch(factory_checkout, cas_sha, build_sha)
     current = create_preflight(factory_checkout, artifact_zip, cas_sha, build_sha,
                                staging_dir, package_version, reviewed_display_name)
+    if _canonical(previous) != _canonical(current):
+        raise ConflictError("GDK preflight receipt differs from freshly verified CAS/artifact/staging")
+    if (current.get("status") != "GDK_MSIXVC2_STAGING_CHECK_ONLY"
+            or current.get("partner_center_selection") != "GDK_GAME"
+            or current.get("package_format") != "MSIXVC2"
+            or current.get("gdk_sdk_validated") is not False
+            or current.get("real_msixvc_built") is not False
+            or current.get("store_submitted") is not False):
+        raise ConflictError("GDK receipt makes invalid downstream claims")
     required_branch = {
         "status": "GDK_BUILD_BRANCH_CHECK_ONLY",
         "partner_center_selection": "GDK_GAME",
@@ -80,15 +89,6 @@ def recheck(
             or not isinstance(branch.get("approved_identity_blob_sha"), str)
             or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", branch["approved_identity_blob_sha"])):
         raise ConflictError("GDK build branch name or approved Identity blob invalid")
-    if _canonical(previous) != _canonical(current):
-        raise ConflictError("GDK preflight receipt differs from freshly verified CAS/artifact/staging")
-    if (current.get("status") != "GDK_MSIXVC2_STAGING_CHECK_ONLY"
-            or current.get("partner_center_selection") != "GDK_GAME"
-            or current.get("package_format") != "MSIXVC2"
-            or current.get("gdk_sdk_validated") is not False
-            or current.get("real_msixvc_built") is not False
-            or current.get("store_submitted") is not False):
-        raise ConflictError("GDK receipt makes invalid downstream claims")
     return {
         "schema_version": 1,
         "status": "GDK_MSIXVC2_RECHECK_PASS",
