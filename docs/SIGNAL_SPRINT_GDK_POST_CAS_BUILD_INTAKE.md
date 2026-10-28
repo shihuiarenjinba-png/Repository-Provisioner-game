@@ -29,7 +29,7 @@ python gdk_build_intake.py \
   --build-head-sha ACTUAL_40_HEX_BUILD_BRANCH_HEAD
 ```
 
-This script performs **no GitHub writes, package builds, Store submissions or Identity retrieval**. It verifies the checked-out Git HEAD, the **live immutable source branch ref**, exact single-parent CAS ancestry, single-file CAS change, approved Identity at CAS and build HEAD, original `QA_UNSIGNED` signature provenance, and exact ZIP/EXE SHA, CRC, provenance and request ID. The checkout must contain the named immutable source ref; a shallow checkout without it fails closed. It emits a machine-readable JSON result with `status=GDK_BUILD_INPUT_CHECK_ONLY`, `next_stage=BUILD_GDK_MSIXVC_FROM_PINNED_EXE`, separate `source_sha`, `cas_commit_sha`, `factory_head_sha`, and `package_version=null`.
+This script performs **no GitHub writes, package builds, Store submissions or Identity retrieval**. It verifies the checked-out Git HEAD, the **live immutable source branch ref**, a clean working tree, the dedicated branch format `codex/game-signal-sprint-gdk-build-[a-z0-9][a-z0-9-]{0,79}`, exact single-parent CAS ancestry, single-file CAS change, approved Identity at CAS and build HEAD, original `QA_UNSIGNED` signature provenance, every intermediate post-CAS commit (rejecting merges and product edits even when later reverted), and exact ZIP/EXE SHA, CRC, provenance and request ID. The checkout must contain the named immutable source ref; a shallow checkout without it fails closed. It emits a machine-readable JSON result with `status=GDK_BUILD_INPUT_CHECK_ONLY`, `next_stage=BUILD_GDK_MSIXVC_FROM_PINNED_EXE`, separate `source_sha`, `cas_commit_sha`, `factory_head_sha`, and `package_version=null`.
 
 The returned JSON is **not** a Windows-all-auto QA receipt and is **not** a real MSIXVC. The Windows/GDK builder must separately choose a reviewed package version, use the pinned executable bytes, produce a real MSIXVC/MSIXVC2, validate its package contents and launch path, and only then hand off the actual package hash to the Windows-all-auto owner (36-minute lane). No central queue or ledger is edited here.
 
@@ -38,4 +38,4 @@ The returned JSON is **not** a Windows-all-auto QA receipt and is **not** a real
 - Actual Signal Sprint CAS return has not been performed.
 - Factory's separate GDK post-CAS gate (stacked Draft PR #13/#14) must also pass on the **same** dedicated build checkout, using branch format `codex/game-signal-sprint-gdk-build-*`. The generic MSIX workflow is not the GDK build path.
 - No real GDK MSIXVC/MSIXVC2, install test, GUI QA or Store approval has been demonstrated.
-- CI green validates this contract, not product E2E.
+- CI green validates this contract, not product E2E. Both Factory and Provisioner check-only gates must pass independently on the same dedicated build checkout; neither PASS is evidence of a real SDK package.

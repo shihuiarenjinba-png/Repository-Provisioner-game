@@ -66,6 +66,12 @@ class GdkBuildIntakeTests(unittest.TestCase):
             return (CAS + " " + SOURCE).encode()
         if args == ("rev-parse", "HEAD"):
             return BUILD.encode()
+        if args == ("symbolic-ref", "--short", "HEAD"):
+            return b"codex/game-signal-sprint-gdk-build-fixture"
+        if args == ("status", "--porcelain"):
+            return b""
+        if args == ("rev-list", "--reverse", CAS + ".." + BUILD):
+            return b""
         if args == ("rev-parse", CAS + "^"):
             return SOURCE.encode()
         if args == ("merge-base", "--is-ancestor", CAS, BUILD):
@@ -207,6 +213,120 @@ class GdkBuildIntakeTests(unittest.TestCase):
 
         with patch.object(intake, "_git", side_effect=no_ancestor):
             with self.assertRaisesRegex(ConflictError, "ancestry"):
+                intake.create_intake(self.root, self.zip, CAS, BUILD)
+
+    def test_generic_msix_branch_rejected(self):
+        original = self.fake_git
+
+        def generic_branch(repo, *args):
+            if args == ("symbolic-ref", "--short", "HEAD"):
+                return b"codex/game-msix-build"
+            return original(repo, *args)
+
+        with patch.object(intake, "_git", side_effect=generic_branch):
+            with self.assertRaisesRegex(ConflictError, "dedicated Factory contract"):
+                intake.create_intake(self.root, self.zip, CAS, BUILD)
+
+    def test_legacy_factory_branch_rejected(self):
+        original = self.fake_git
+
+        def legacy_branch(repo, *args):
+            if args == ("symbolic-ref", "--short", "HEAD"):
+                return b"codex/game-gdk-signal-sprint-build-old"
+            return original(repo, *args)
+
+        with patch.object(intake, "_git", side_effect=legacy_branch):
+            with self.assertRaisesRegex(ConflictError, "dedicated Factory contract"):
+                intake.create_intake(self.root, self.zip, CAS, BUILD)
+
+    def test_dirty_build_checkout_rejected(self):
+        original = self.fake_git
+
+        def dirty(repo, *args):
+            if args == ("status", "--porcelain"):
+                return b"?? untracked-file"
+            return original(repo, *args)
+
+        with patch.object(intake, "_git", side_effect=dirty):
+            with self.assertRaisesRegex(ConflictError, "checkout is dirty"):
+                intake.create_intake(self.root, self.zip, CAS, BUILD)
+
+    def test_detached_head_rejected(self):
+        original = self.fake_git
+
+        def detached(repo, *args):
+            if args == ("symbolic-ref", "--short", "HEAD"):
+                raise ConflictError("GDK build Git ancestry/content verification failed")
+            return original(repo, *args)
+
+        with patch.object(intake, "_git", side_effect=detached):
+            with self.assertRaisesRegex(ConflictError, "verification failed"):
+                intake.create_intake(self.root, self.zip, CAS, BUILD)
+
+    def test_post_cas_edit_then_revert_product_rejected(self):
+        original = self.fake_git
+        changed, reverted = "c" * 40, "d" * 40
+
+        def tamper_history(repo, *args):
+            if args == ("rev-list", "--reverse", CAS + ".." + BUILD):
+                return (changed + "\n" + reverted).encode()
+            if args == ("rev-list", "--parents", "-n", "1", changed):
+                return (changed + " " + CAS).encode()
+            if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", changed):
+                return b"products/signal-sprint/main.py"
+            return original(repo, *args)
+
+        with patch.object(intake, "_git", side_effect=tamper_history):
+            with self.assertRaisesRegex(ConflictError, "product change in history"):
+                intake.create_intake(self.root, self.zip, CAS, BUILD)
+
+    def test_post_cas_merge_commit_rejected(self):
+        original = self.fake_git
+        merged = "c" * 40
+
+        def merge_history(repo, *args):
+            if args == ("rev-list", "--reverse", CAS + ".." + BUILD):
+                return merged.encode()
+            if args == ("rev-list", "--parents", "-n", "1", merged):
+                return (merged + " " + CAS + " " + "d" * 40).encode()
+            return original(repo, *args)
+
+        with patch.object(intake, "_git", side_effect=merge_history):
+            with self.assertRaisesRegex(ConflictError, "post-CAS merge"):
+                intake.create_intake(self.root, self.zip, CAS, BUILD)
+
+    def test_post_cas_docs_only_change_allowed(self):
+        original = self.fake_git
+        doc_commit = "c" * 40
+
+        def docs_history(repo, *args):
+            if args == ("rev-list", "--reverse", CAS + ".." + BUILD):
+                return doc_commit.encode()
+            if args == ("rev-list", "--parents", "-n", "1", doc_commit):
+                return (doc_commit + " " + CAS).encode()
+            if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", doc_commit):
+                return b"docs/SIGNAL_SPRINT_GDK_BUILD.md"
+            return original(repo, *args)
+
+        with patch.object(intake, "_git", side_effect=docs_history):
+            result = intake.create_intake(self.root, self.zip, CAS, BUILD)
+        self.assertEqual(result["status"], "GDK_BUILD_INPUT_CHECK_ONLY")
+
+    def test_post_cas_identity_edit_rejected(self):
+        original = self.fake_git
+        edit_commit = "c" * 40
+
+        def identity_history(repo, *args):
+            if args == ("rev-list", "--reverse", CAS + ".." + BUILD):
+                return edit_commit.encode()
+            if args == ("rev-list", "--parents", "-n", "1", edit_commit):
+                return (edit_commit + " " + CAS).encode()
+            if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", edit_commit):
+                return intake.APPROVED_PATH.encode()
+            return original(repo, *args)
+
+        with patch.object(intake, "_git", side_effect=identity_history):
+            with self.assertRaisesRegex(ConflictError, "product change in history"):
                 intake.create_intake(self.root, self.zip, CAS, BUILD)
 
 

@@ -23,6 +23,7 @@ from package_identity_provisioner import (
 ARTIFACT_SHA256 = "e48a0426595dc227988f12944921511a47d5c8feca8b063a161dd0dd61306412"
 EXE_SHA256 = "9c31c3633de0d9e248cd1642f9003962f4f117bf6780cf4fab9f66d1d73485ad"
 APPROVED_PATH = "products/signal-sprint/store/approved-identity.json"
+BUILD_BRANCH = re.compile(r"codex/game-signal-sprint-gdk-build-[a-z0-9][a-z0-9-]{0,79}\Z")
 APPROVED_FIELDS = frozenset({
     "schema_version", "reviewed", "request_id", "product_type", "slug",
     "source_factory", "source_repository", "source_branch", "source_sha",
@@ -71,6 +72,14 @@ def verify_cas_checkout(repo: Path, cas_sha: str, build_sha: str) -> dict:
         raise ConflictError("GDK immutable source branch moved")
     if _git(repo, "rev-parse", "HEAD").decode() != build_sha:
         raise ConflictError("GDK checkout HEAD differs from declared build HEAD")
+    # Factory post-CAS gate requires a clean, named GDK build checkout.
+    # Enforce parity here: neither gate may emit a check-only PASS for a
+    # detached HEAD, a generic MSIX branch, or uncommitted/untracked files.
+    branch = _git(repo, "symbolic-ref", "--short", "HEAD").decode()
+    if not BUILD_BRANCH.fullmatch(branch):
+        raise ConflictError("GDK build branch name violates dedicated Factory contract")
+    if _git(repo, "status", "--porcelain"):
+        raise ConflictError("GDK build checkout is dirty")
     # CAS must have exactly one parent; a merge with source as first parent
     # is not an atomic Identity-only CAS.
     if _git(repo, "rev-list", "--parents", "-n", "1", cas_sha).decode().split() != [cas_sha, source]:
@@ -107,6 +116,18 @@ def verify_cas_checkout(repo: Path, cas_sha: str, build_sha: str) -> dict:
         raise ConflictError("GDK approved Identity provenance timestamp invalid")
     if type(approved["signature_status"]) is not str or approved["signature_status"] != "QA_UNSIGNED":
         raise ConflictError("GDK pinned EXE signature provenance must remain QA_UNSIGNED")
+    # A final-tree comparison alone misses edit-then-revert attacks. Inspect
+    # every intermediate commit and reject product/Identity modifications and
+    # merge commits, matching Factory's independent post-CAS gate.
+    commits = _git(repo, "rev-list", "--reverse", cas_sha + ".." + build_sha).decode().splitlines()
+    for commit in commits:
+        parents = _git(repo, "rev-list", "--parents", "-n", "1", commit).decode().split()
+        if len(parents) != 2 or parents[0] != commit:
+            raise ConflictError("GDK post-CAS merge or malformed commit requires review")
+        changed = _git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", commit)
+        for path in changed.decode("utf-8").splitlines():
+            if path.startswith("products/") or path == APPROVED_PATH:
+                raise ConflictError("GDK post-CAS product change in history")
     return approved
 
 
