@@ -7,11 +7,14 @@ actual GDK SDK inspection, installation, gameplay and Store certification.
 
 ## Check transferred bytes before QA
 
-After `gdk_e2e_handoff.py` has produced a folder and that folder has been
-transferred to the Windows/E2E owner, run from Repository-Provisioner-game:
+After `gdk_e2e_handoff.py` has produced a folder, record the sender CLI's
+`handoff_manifest_sha256` **outside the handoff directory** via an
+independently trusted channel (such as a verified build record). Do not
+obtain the digest from the received manifest or an untrusted sidecar.
+After transfer, run from Repository-Provisioner-game:
 
 ```powershell
-python gdk_e2e_handoff_verify.py --handoff-dir C:\\qa\\gdk\\handoff
+python gdk_e2e_handoff_verify.py --handoff-dir C:\\qa\\gdk\\handoff --expected-manifest-sha256 YOUR_TRUSTED_64_HEX_SHA256
 ```
 
 The receiver requires exactly `package.msixvc2`, `validation.log` and
@@ -22,7 +25,7 @@ malformed CAS/build SHAs, unsafe filenames and any false approval claim.
 It re-hashes the transferred package and log, but **never modifies them**.
 
 Successful output is `GDK_E2E_TRANSFER_BYTES_CHECK_PASS`, which means only
-the transport bytes match the untrusted sender's manifest. It is not proof
+the transport bytes match the independently pinned sender manifest. It is not proof
 that makepkg ran, that MicrosoftGame.config matches the package, or that
 the package installs or meets Store requirements. These require independent
 Windows/GDK validation. The receiver always returns

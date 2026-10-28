@@ -166,7 +166,12 @@ def main(argv=None) -> int:
         print(json.dumps({"status": getattr(exc, "status", "CONFLICT"),
                           "error": str(exc), "e2e_pass": False}))
         return 2
-    print(json.dumps(result, sort_keys=True, ensure_ascii=False))
+    # The digest is emitted outside handoff.json to avoid self-reference.
+    # The receiver must obtain this through an independently trusted channel.
+    manifest_sha, _ = _hash_file(args.output_dir / "handoff.json", MAX_JSON,
+                                 "GDK handoff manifest")
+    print(json.dumps({**result, "handoff_manifest_sha256": manifest_sha},
+                     sort_keys=True, ensure_ascii=False))
     return 0
 
 
