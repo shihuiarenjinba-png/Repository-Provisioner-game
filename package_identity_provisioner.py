@@ -807,7 +807,10 @@ class Provisioner:
         """Re-inspect one prior Provisioner EXE result without rebuilding bytes."""
         if self.resume_result is None:
             return None
-        raw = load_json(self.resume_result, 262_144)
+        try:
+            raw = load_json(self.resume_result, 262_144)
+        except HoldError as exc:
+            raise ConflictError("Pinned GAME resume result is missing or invalid") from exc
         expected = {
             "request_id": job.request_id, "product_type": job.product_type,
             "source_factory": job.source_factory, "source_repository": job.source_repository,
@@ -832,8 +835,14 @@ class Provisioner:
                 or "\x00" in raw_path or not Path(raw_path).is_absolute()):
             raise ConflictError("Resume result must pin an absolute local EXE path")
         path = Path(raw_path)
-        inspected = inspect_package(path)
-        verify_game_windows_exe(path)
+        try:
+            inspected = inspect_package(path)
+            verify_game_windows_exe(path)
+        except (HoldError, OSError) as exc:
+            # A missing/corrupt previously inspected EXE is a provenance
+            # conflict.  Returning HOLD here would overwrite the pinned
+            # ledger with NOT_BUILT and permit an unsafe later rebuild.
+            raise ConflictError("Previously pinned GAME EXE is missing or invalid") from exc
         for key in ("kind", "sha256", "size_bytes", "signature_status"):
             if inspected.get(key) != previous.get(key):
                 raise ConflictError("Resume EXE bytes or inspection metadata changed")
