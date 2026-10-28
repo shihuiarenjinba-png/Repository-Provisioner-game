@@ -66,7 +66,10 @@ class GdkBuildIntakeTests(unittest.TestCase):
             return SOURCE.encode()
         if args == ("merge-base", "--is-ancestor", CAS, BUILD):
             return b""
-        if args == ("show", CAS + ":" + intake.APPROVED_PATH):
+        if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", CAS):
+            return intake.APPROVED_PATH.encode()
+        if args in (("show", CAS + ":" + intake.APPROVED_PATH),
+                    ("show", BUILD + ":" + intake.APPROVED_PATH)):
             return json.dumps(self.approved).encode()
         raise AssertionError(args)
 
@@ -135,6 +138,30 @@ class GdkBuildIntakeTests(unittest.TestCase):
 
         with patch.object(intake, "_git", side_effect=wrong_parent):
             with self.assertRaisesRegex(ConflictError, "directly based"):
+                intake.create_intake(self.root, self.zip, CAS, BUILD)
+
+    def test_cas_must_change_only_identity(self):
+        original = self.fake_git
+
+        def wrong_files(repo, *args):
+            if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", CAS):
+                return (intake.APPROVED_PATH + "\\nproducts/signal-sprint/main.py").encode()
+            return original(repo, *args)
+
+        with patch.object(intake, "_git", side_effect=wrong_files):
+            with self.assertRaisesRegex(ConflictError, "outside approved Identity"):
+                intake.create_intake(self.root, self.zip, CAS, BUILD)
+
+    def test_build_branch_cannot_change_approved_identity(self):
+        original = self.fake_git
+
+        def changed_build_identity(repo, *args):
+            if args == ("show", BUILD + ":" + intake.APPROVED_PATH):
+                return json.dumps({**self.approved, "store_id": "9N21MJM7S57Q"}).encode()
+            return original(repo, *args)
+
+        with patch.object(intake, "_git", side_effect=changed_build_identity):
+            with self.assertRaisesRegex(ConflictError, "build HEAD changed"):
                 intake.create_intake(self.root, self.zip, CAS, BUILD)
 
     def test_cas_git_ancestry_failure_rejected(self):
