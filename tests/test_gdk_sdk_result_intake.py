@@ -134,7 +134,10 @@ class GdkSdkResultIntakeTests(unittest.TestCase):
         other = self.output.parent / "other.msixvc2"
         other.write_bytes(self.package.read_bytes())
         self.package.unlink()
-        self.package.symlink_to(other)
+        try:
+            self.package.symlink_to(other)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlink creation unavailable on this Windows runner")
         with self.assertRaisesRegex(ConflictError, "escapes|linked"):
             self.check()
 
