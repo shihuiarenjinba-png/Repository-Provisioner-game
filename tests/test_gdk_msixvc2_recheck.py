@@ -32,6 +32,25 @@ class GdkMsixvc2RecheckTests(unittest.TestCase):
         }
         self.write_receipt()
         self.fresh = dict(self.snapshot)
+        self.branch_evidence = {
+            "status": "GDK_BUILD_BRANCH_CHECK_ONLY",
+            "partner_center_selection": "GDK_GAME",
+            "package_format": "MSIXVC2",
+            "request_id": self.snapshot["request_id"],
+            "source_sha": self.snapshot["source_sha"],
+            "cas_commit_sha": self.snapshot["cas_commit_sha"],
+            "factory_head_sha": self.snapshot["factory_head_sha"],
+            "product_history_gate": "NO_PRODUCT_PATH_CHANGES_SINCE_CAS",
+            "build_branch": "codex/game-signal-sprint-gdk-build-test",
+            "approved_identity_blob_sha": "f" * 40,
+            "gdk_sdk_validated": False,
+            "real_msixvc_built": False,
+            "store_submitted": False,
+        }
+        branch_patch = patch.object(gate, "verify_build_branch",
+                                    side_effect=lambda *args: self.branch_evidence)
+        branch_patch.start()
+        self.addCleanup(branch_patch.stop)
         self.patch = patch.object(gate, "create_preflight", side_effect=lambda *args: self.fresh)
         self.patch.start()
         self.addCleanup(self.patch.stop)
@@ -50,6 +69,9 @@ class GdkMsixvc2RecheckTests(unittest.TestCase):
         self.assertEqual(result["partner_center_selection"], "GDK_GAME")
         self.assertEqual(result["staging_files_sha256"], self.snapshot["staging_files_sha256"])
         self.assertEqual(result["verified_receipt_sha256"], hashlib.sha256(self.receipt.read_bytes()).hexdigest())
+        self.assertEqual(result["build_branch"], self.branch_evidence["build_branch"])
+        self.assertEqual(result["product_history_gate"], "NO_PRODUCT_PATH_CHANGES_SINCE_CAS")
+        self.assertEqual(result["approved_identity_blob_sha"], "f" * 40)
         self.assertFalse(result["gdk_sdk_validated"])
         self.assertFalse(result["real_msixvc_built"])
         self.assertFalse(result["store_submitted"])
@@ -125,6 +147,37 @@ class GdkMsixvc2RecheckTests(unittest.TestCase):
         before = self.receipt.read_bytes()
         self.run_check()
         self.assertEqual(before, self.receipt.read_bytes())
+
+
+    def test_unsafe_branch_history_rejected_even_with_matching_receipt(self):
+        self.branch_evidence["product_history_gate"] = "UNVERIFIED"
+        with self.assertRaisesRegex(ConflictError, "branch evidence mismatch"):
+            self.run_check()
+
+    def test_wrong_build_sha_from_branch_gate_rejected(self):
+        self.branch_evidence["factory_head_sha"] = "e" * 40
+        with self.assertRaisesRegex(ConflictError, "branch evidence mismatch"):
+            self.run_check()
+
+    def test_wrong_identity_blob_format_rejected(self):
+        self.branch_evidence["approved_identity_blob_sha"] = "invalid"
+        with self.assertRaisesRegex(ConflictError, "Identity blob invalid"):
+            self.run_check()
+
+    def test_wrong_branch_name_rejected(self):
+        self.branch_evidence["build_branch"] = "codex/game-signal-sprint-undo-20261027"
+        with self.assertRaisesRegex(ConflictError, "branch name"):
+            self.run_check()
+
+    def test_fake_sdk_success_in_branch_gate_rejected(self):
+        self.branch_evidence["gdk_sdk_validated"] = True
+        with self.assertRaisesRegex(ConflictError, "branch evidence mismatch"):
+            self.run_check()
+
+    def test_branch_gate_failure_is_not_bypassed(self):
+        with patch.object(gate, "verify_build_branch", side_effect=ConflictError("dirty checkout")):
+            with self.assertRaisesRegex(ConflictError, "dirty checkout"):
+                self.run_check()
 
 
 if __name__ == "__main__":
