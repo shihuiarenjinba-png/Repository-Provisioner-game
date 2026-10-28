@@ -153,7 +153,7 @@ class SignalSprintContractTests(unittest.TestCase):
     def test_missing_or_invalid_resume_exe_preserves_pinned_ledger(self):
         # A filesystem failure is a conflict with previously pinned evidence,
         # not a fresh HOLD that may overwrite the immutable EXE checkpoint.
-        for corruption in ("missing", "truncated"):
+        for corruption in ("missing", "truncated", "missing_result"):
             with self.subTest(corruption=corruption):
                 with tempfile.TemporaryDirectory() as tmp:
                     root = Path(tmp)
@@ -167,6 +167,8 @@ class SignalSprintContractTests(unittest.TestCase):
                     prior.write_text(json.dumps(held), encoding="utf-8")
                     if corruption == "missing":
                         build.path.unlink()
+                    elif corruption == "missing_result":
+                        prior.unlink()
                     else:
                         build.path.write_bytes(b"truncated PE")
                     p.resume_result = prior
