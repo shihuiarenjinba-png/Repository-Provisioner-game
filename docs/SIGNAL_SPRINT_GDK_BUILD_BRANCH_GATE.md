@@ -21,6 +21,10 @@ requires all of the following:
   artifact ZIP and receipts **outside** the Factory checkout.
 - No changed files under `products/signal-sprint` between the CAS commit
   and build HEAD, including the approved Identity and product sources.
+- No *intermediate* commit between CAS and build HEAD may touch the product
+  path, even if a later commit reverts it and the final tree matches CAS.
+  This closes the edit-then-revert bypass of a final-tree-only diff. The
+  receipt records `product_history_gate=NO_PRODUCT_PATH_CHANGES_SINCE_CAS`.
 - Actual CAS Identity Git blob ID recorded in the check-only receipt.
 - Separate immutable `source_sha`, actual `cas_commit_sha`, and actual
   `factory_head_sha`. Do not reuse the original EXE from a new build.
