@@ -14,7 +14,7 @@ obtain the digest from the received manifest or an untrusted sidecar.
 After transfer, run from Repository-Provisioner-game:
 
 ```powershell
-python gdk_e2e_handoff_verify.py --handoff-dir C:\\qa\\gdk\\handoff --expected-manifest-sha256 <trusted-64-character-sha256>
+python gdk_e2e_handoff_verify.py --handoff-dir C:\\qa\\gdk\\handoff --expected-manifest-sha256 YOUR_TRUSTED_64_HEX_SHA256
 ```
 
 The receiver requires exactly `package.msixvc2`, `validation.log` and
