@@ -22,12 +22,12 @@ approved Identity, pinned ZIP and staging checks via the existing recheck,
 then independently re-hashes the six staged files and checks output isolation.
 It **does not execute** the GDK SDK or claim that a package exists.
 
-On a Windows machine with the April 2026 GDK or later, an *authorized builder*
+On a Windows machine with the October 2026 GDK or later, an *authorized builder*
 must run a **fresh** preflight and recheck immediately before invoking the
 SDK. The proposed command shape is:
 
 ```text
-makepkg2.exe pack /msixvc2 /d <staging> /pc /pd <empty-output> /validationcritical
+makepkg.exe pack /msixvc2 /d <staging> /pc /pd <empty-output> /validationcritical
 ```
 
 Do not add `/skipvalidation`, `upload`, or Partner Center authentication.
@@ -36,16 +36,19 @@ separate real-build evidence. A successful unit test or check-only receipt
 is not `REAL_MSIX_PASS` or `E2E PASS`. Installation/GUI QA belongs to the
 Windows/E2E lane.
 
-**Release limitation:** Microsoft's April 2026 MSIXVC2 guidance describes
-MSIXVC2 as a preview and says public-release certification is blocked by
-Submission Validator during preview. Treat a built MSIXVC2 as a test artifact,
-not proof of Store publication readiness. Re-check the current Microsoft
-policy before choosing a release format; do not silently switch Signal Sprint
-to ordinary MSIX or an MSIX/PWA Partner Center listing.
+**Release gate (October 2026 GDK):** Microsoft now documents MSIXVC2 as
+**generally available** and eligible for public-release certification.
+The managed packaging tool is `makepkg.exe`; the temporary `makepkg2.exe`
+name has been removed. This corrects the obsolete preview-era restriction.
+A successful build still is **not** Store approval: require actual SDK
+validation, real package SHA evidence, Windows install/GUI QA, and explicit
+Partner Center certification. Do not silently switch Signal Sprint to ordinary
+MSIX or an MSIX/PWA Partner Center listing. Do not run developer-mode registry
+or policy changes as part of this cloud-side handoff.
 
 Official references:
-- https://learn.microsoft.com/ja-jp/gaming/gdk/docs/features/common/packaging/overviews/packaging-getting-started-for-pc-msixvc2?view=gdk-2604
-- https://learn.microsoft.com/ja-jp/gaming/gdk/docs/features/common/packaging/deployment/makepkg2?view=gdk-2604
+- https://learn.microsoft.com/en-us/gaming/gdk/docs/features/common/packaging/overviews/packaging-getting-started-for-pc-msixvc2?view=gdk-2604
+- https://learn.microsoft.com/en-us/gaming/gdk/docs/features/common/packaging/deployment/makepkg?view=gdk-2604
 
 No new game generation, actual CAS, Store submission, branch merge, or
 Windows-all-auto central ledger mutation is performed by this handoff.
