@@ -45,6 +45,8 @@ def parse_receipt(raw: bytes, stage: str) -> dict:
     require(len(raw) <= 65536, stage + " output too large")
     try:
         value = json.loads(raw.decode("utf-8"), object_pairs_hook=unique_pairs)
+    except DualGateHold:
+        raise
     except (UnicodeError, ValueError) as exc:
         raise DualGateHold(stage + " invalid JSON") from exc
     require(type(value) is dict, stage + " output not an object")
