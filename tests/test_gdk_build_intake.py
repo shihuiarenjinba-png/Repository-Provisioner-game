@@ -269,7 +269,7 @@ class GdkBuildIntakeTests(unittest.TestCase):
 
         def tamper_history(repo, *args):
             if args == ("rev-list", "--reverse", CAS + ".." + BUILD):
-                return (changed + "\\n" + reverted).encode()
+                return (changed + "\n" + reverted).encode()
             if args == ("rev-list", "--parents", "-n", "1", changed):
                 return (changed + " " + CAS).encode()
             if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", changed):
