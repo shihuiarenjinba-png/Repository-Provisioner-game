@@ -64,10 +64,17 @@ def verify_cas_checkout(repo: Path, cas_sha: str, build_sha: str) -> dict:
             or not isinstance(build_sha, str) or not SHA40.fullmatch(build_sha)
             or cas_sha == source or build_sha == source):
         raise ConflictError("GDK CAS/build SHA is missing or equals immutable source")
+    # Fail closed if the named immutable source ref has moved. A valid-looking
+    # CAS parent is insufficient when the live source branch no longer matches.
+    source_ref = "refs/heads/" + PINNED_SIGNAL_SPRINT_JOB["source_branch"]
+    if _git(repo, "rev-parse", source_ref).decode() != source:
+        raise ConflictError("GDK immutable source branch moved")
     if _git(repo, "rev-parse", "HEAD").decode() != build_sha:
         raise ConflictError("GDK checkout HEAD differs from declared build HEAD")
-    if _git(repo, "rev-parse", cas_sha + "^").decode() != source:
-        raise ConflictError("GDK CAS commit is not directly based on immutable source")
+    # CAS must have exactly one parent; a merge with source as first parent
+    # is not an atomic Identity-only CAS.
+    if _git(repo, "rev-list", "--parents", "-n", "1", cas_sha).decode().split() != [cas_sha, source]:
+        raise ConflictError("GDK CAS must be a single-parent child of immutable source")
     _git(repo, "merge-base", "--is-ancestor", cas_sha, build_sha)
     # The atomic CAS must change only the reviewed Identity file, not product
     # source. A later build-branch commit must not replace that Identity.
@@ -98,8 +105,8 @@ def verify_cas_checkout(repo: Path, cas_sha: str, build_sha: str) -> dict:
             r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,6})?(?:Z|[+-]\d\d:\d\d)",
             approved["provided_at"]):
         raise ConflictError("GDK approved Identity provenance timestamp invalid")
-    if not isinstance(approved["signature_status"], str) or not approved["signature_status"]:
-        raise ConflictError("GDK pinned EXE signature provenance missing")
+    if type(approved["signature_status"]) is not str or approved["signature_status"] != "QA_UNSIGNED":
+        raise ConflictError("GDK pinned EXE signature provenance must remain QA_UNSIGNED")
     return approved
 
 
