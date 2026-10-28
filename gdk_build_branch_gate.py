@@ -38,6 +38,14 @@ def verify_build_branch(factory_checkout: Path, cas_sha: str, build_sha: str) ->
     if changed:
         raise ConflictError("GDK build branch modified immutable Signal Sprint product tree")
 
+    # A final-tree diff alone misses a source/Identity edit followed by a
+    # revert in a later integration commit. Reject *any* intermediate product
+    # path mutation after CAS, even when build HEAD has the original bytes.
+    product_history = _git(factory_checkout, "log", "--format=", "--name-only",
+                           cas_sha + ".." + build_sha, "--", "products/signal-sprint")
+    if product_history:
+        raise ConflictError("GDK build branch history touched immutable Signal Sprint product tree")
+
     blob_sha = _git(factory_checkout, "rev-parse", cas_sha + ":" + APPROVED_PATH).decode("ascii")
     if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", blob_sha):
         raise ConflictError("GDK approved Identity Git blob id is invalid")
@@ -53,6 +61,7 @@ def verify_build_branch(factory_checkout: Path, cas_sha: str, build_sha: str) ->
         "factory_head_sha": build_sha,
         "build_branch": branch,
         "approved_identity_blob_sha": blob_sha,
+        "product_history_gate": "NO_PRODUCT_PATH_CHANGES_SINCE_CAS",
         "next_stage": "GDK_MSIXVC2_STAGING_RECHECK_AND_SDK_VALIDATION",
         "gdk_sdk_validated": False,
         "real_msixvc_built": False,
