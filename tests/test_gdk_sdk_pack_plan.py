@@ -60,11 +60,14 @@ class GdkSdkPackPlanTests(unittest.TestCase):
         self.assertEqual(result["status"], "GDK_SDK_PACK_PLAN_CHECK_ONLY")
         self.assertEqual(result["partner_center_selection"], "GDK_GAME")
         self.assertEqual(result["sdk_command_argv_not_executed"][:3],
-                         ["makepkg2.exe", "pack", "/msixvc2"])
+                         ["makepkg.exe", "pack", "/msixvc2"])
         self.assertIn("/validationcritical", result["sdk_command_argv_not_executed"])
         self.assertNotIn("upload", result["sdk_command_argv_not_executed"])
         self.assertFalse(result["real_msixvc_built"])
-        self.assertTrue(result["msixvc2_preview_public_certification_blocked"])
+        self.assertFalse(result["msixvc2_preview_public_certification_blocked"])
+        self.assertTrue(result["public_release_requires_certification"])
+        self.assertIn("October 2026 GDK", result["sdk_required"])
+        self.assertNotIn("makepkg2.exe", result["sdk_command_argv_not_executed"])
         self.assertEqual(list(self.output.iterdir()), [])
 
     def test_changed_exe_after_recheck_rejected(self):

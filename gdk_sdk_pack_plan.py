@@ -3,7 +3,7 @@
 The returned argv is only a handoff contract. On Windows, a separate authorized
 builder must re-run the CAS/branch/staging gates immediately before execution,
 verify the installed GDK and capture SDK validation + package SHA evidence.
-MSIXVC2 is preview and is NOT a public Store certification approval.
+MSIXVC2 is generally available with October 2026 GDK, but a check-only plan is NOT a Store certification approval.
 """
 from __future__ import annotations
 
@@ -87,7 +87,7 @@ def make_pack_plan(factory_checkout: Path, artifact_zip: Path, cas_sha: str,
             raise ConflictError("GDK SDK staging changed after recheck: " + name)
 
     # No /skipvalidation, /upload, /auth or browser/Partner Center operation.
-    argv = ["makepkg2.exe", "pack", "/msixvc2", "/d", str(staging),
+    argv = ["makepkg.exe", "pack", "/msixvc2", "/d", str(staging),
             "/pc", "/pd", str(output), "/validationcritical"]
     return {
         "schema_version": 1,
@@ -103,8 +103,9 @@ def make_pack_plan(factory_checkout: Path, artifact_zip: Path, cas_sha: str,
         "verified_receipt_sha256": verified["verified_receipt_sha256"],
         "staging_files_sha256": dict(sorted(hashes.items())),
         "sdk_command_argv_not_executed": argv,
-        "sdk_required": "April 2026 GDK or later with makepkg2.exe",
-        "msixvc2_preview_public_certification_blocked": True,
+        "sdk_required": "October 2026 GDK or later with managed makepkg.exe",
+        "msixvc2_preview_public_certification_blocked": False,
+        "public_release_requires_certification": True,
         "next_stage": "WINDOWS_GDK_SDK_VALIDATE_AND_PACK_WITH_FRESH_RECHECK",
         "gdk_sdk_validated": False,
         "real_msixvc_built": False,
