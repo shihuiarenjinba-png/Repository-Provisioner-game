@@ -44,3 +44,23 @@ Successful output status is `GDK_MSIXVC2_STAGING_CHECK_ONLY`, with `gdk_sdk_vali
 Original Artifact #12706862577 expires 2026-11-01 03:18:51 UTC; preserve the original ZIP bytes. Never substitute a different rebuild. Store submission requires separate approval.
 
 Current state: GDK Identity received; staging contract is CI-testable; actual CAS, Windows SDK validation, real MSIXVC2 and E2E remain unproven.
+
+## Mandatory second-pass verification immediately before makepkg
+
+Save the complete JSON emitted by the first `gdk_msixvc2_preflight.py` invocation to an unmodified, regular local receipt file. On the **same dedicated post-CAS build checkout**, run the second-pass check immediately before GDK SDK validation and packaging:
+
+```bash
+python gdk_msixvc2_recheck.py \
+  --factory-checkout /path/to/AI-Game-Factory-post-cas \
+  --pinned-artifact-zip /path/to/original-signal-sprint.zip \
+  --cas-commit-sha ACTUAL_CAS_SHA \
+  --build-head-sha ACTUAL_BUILD_SHA \
+  --staging-dir /path/to/reviewed-gdk-staging \
+  --package-version REVIEWED_A.B.C.0 \
+  --reviewed-display-name "REVIEWED_DISPLAY_NAME" \
+  --preflight-receipt /path/to/saved-preflight-receipt.json
+```
+
+The recheck does **not** trust a stored receipt as authorization. It independently reruns the actual Git CAS parent/ancestry and approved Identity checks, original ZIP/EXE SHA and CRC checks, reviewed XML generation, exact six-file staging inventory and all staging hashes. Every field must match the earlier receipt, including types and absence of extra fields. Duplicate JSON keys, symlinks, missing or oversized receipts and stale/modified payloads are rejected. The resulting `GDK_MSIXVC2_RECHECK_PASS` is still **not** a successful SDK validation, package build, install, Store submission or E2E.
+
+The Windows GDK build owner must run this check immediately before packaging and recheck again if **any** staging content, Git HEAD or build input changes. A successful snapshot is not a filesystem lock and does not eliminate a time-of-check/time-of-use race; protect the staging folder against concurrent writes through packaging. Do not allow the normal MSIX/PWA path to consume this receipt. This remains GDK_GAME/MSIXVC2 only.
