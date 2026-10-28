@@ -109,6 +109,64 @@ class GdkIdentityContractTests(unittest.TestCase):
         self.assertNotIn("verified_by", approved)
         self.assertNotIn("evidence_url", approved)
 
+    def test_self_consistent_alternate_source_cannot_consume_gdk_identity(self):
+        # Even when both the job and supplied evidence agree with each other,
+        # they must match the original immutable Signal Sprint source SHA.
+        with tempfile.TemporaryDirectory() as tmp:
+            bad_job = raw_job()
+            bad_identity = gdk_identity()
+            alternate_sha = "a" * 40
+            bad_job["source_sha"] = alternate_sha
+            bad_job["request_id"] = "game-signal-sprint-" + alternate_sha
+            bad_identity["source_sha"] = alternate_sha
+            bad_identity["request_id"] = bad_job["request_id"]
+            path = Path(tmp) / "official-identity.json"
+            path.write_text(json.dumps(bad_identity), encoding="utf-8")
+            with self.assertRaisesRegex(Exception, "immutable Signal Sprint"):
+                OfficialIdentityProvider(path).lookup(
+                    Job.validate(bad_job, ProductConfig.load(ROOT / "config.json")))
+
+    def test_alternate_branch_or_request_id_is_rejected_before_cas(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "official-identity.json"
+            for field, value in (
+                ("source_branch", "codex/other-signal-sprint-source"),
+                ("request_id", "game-signal-sprint-another-valid-request"),
+            ):
+                with self.subTest(field=field):
+                    bad_job = raw_job()
+                    bad_identity = gdk_identity()
+                    bad_job[field] = value
+                    if field == "request_id":
+                        bad_identity[field] = value
+                    path.write_text(json.dumps(bad_identity), encoding="utf-8")
+                    with self.assertRaisesRegex(Exception, "immutable Signal Sprint"):
+                        OfficialIdentityProvider(path).lookup(
+                            Job.validate(bad_job, ProductConfig.load(ROOT / "config.json")))
+
+    def test_all_reviewed_gdk_identity_values_are_exact_not_just_well_formed(self):
+        replacements = {
+            "store_id": "9N21MJM7S57Q",
+            "name": "OkinawaDesktopTools.SignalSprint2",
+            "publisher": "CN=56263F21-A700-41DB-8C9B-114C22FB82FC",
+            "publisher_display_name": "Other Desktop Tools",
+            "package_family_name": "OkinawaDesktopTools.SignalSprint_aaaaaaaaaaaaa",
+            "package_sid": "S-1-15-2-1437967488-3265478925-1925977903-994526844-2895000717-1943620661-378024716",
+            "xbox_title_id": "68721418",
+            "xbox_scid": "00000000-0000-0000-0000-000068721418",
+            "msa_app_id": "39852fc3-fa46-4bda-88aa-b35385488cee",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "official-identity.json"
+            job = Job.validate(raw_job(), ProductConfig.load(ROOT / "config.json"))
+            for field, value in replacements.items():
+                with self.subTest(field=field):
+                    bad_identity = gdk_identity()
+                    bad_identity[field] = value
+                    path.write_text(json.dumps(bad_identity), encoding="utf-8")
+                    with self.assertRaisesRegex(Exception, "user-reviewed Signal Sprint"):
+                        OfficialIdentityProvider(path).lookup(job)
+
     def test_wrong_gdk_identifier_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "official-identity.json"
