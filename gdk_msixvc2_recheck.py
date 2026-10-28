@@ -14,7 +14,9 @@ from pathlib import Path
 import stat
 import sys
 
+from gdk_build_branch_gate import BRANCH_PATTERN, verify_build_branch
 from gdk_msixvc2_preflight import create_preflight
+import re
 from package_identity_provisioner import ConflictError, HoldError, _unique_json_object
 
 MAX_RECEIPT_BYTES = 1_000_000
@@ -52,6 +54,9 @@ def recheck(
     # Receipt never supplies trusted paths, refs, versions or display names.
     # These are independently provided by the caller and re-verified below.
     previous, raw = read_receipt(receipt_path)
+    # Do not accept a valid staging receipt from an unsafe or dirty build branch.
+    # Re-evaluate actual Git history at the final SDK handoff, not a saved gate receipt.
+    branch = verify_build_branch(factory_checkout, cas_sha, build_sha)
     current = create_preflight(factory_checkout, artifact_zip, cas_sha, build_sha,
                                staging_dir, package_version, reviewed_display_name)
     if _canonical(previous) != _canonical(current):
@@ -63,6 +68,27 @@ def recheck(
             or current.get("real_msixvc_built") is not False
             or current.get("store_submitted") is not False):
         raise ConflictError("GDK receipt makes invalid downstream claims")
+    required_branch = {
+        "status": "GDK_BUILD_BRANCH_CHECK_ONLY",
+        "partner_center_selection": "GDK_GAME",
+        "package_format": "MSIXVC2",
+        "request_id": current["request_id"],
+        "source_sha": current["source_sha"],
+        "cas_commit_sha": current["cas_commit_sha"],
+        "factory_head_sha": current["factory_head_sha"],
+        "product_history_gate": "NO_PRODUCT_PATH_CHANGES_SINCE_CAS",
+        "gdk_sdk_validated": False,
+        "real_msixvc_built": False,
+        "store_submitted": False,
+    }
+    for key, expected in required_branch.items():
+        if type(branch.get(key)) is not type(expected) or branch[key] != expected:
+            raise ConflictError("GDK build branch evidence mismatch: " + key)
+    if (not isinstance(branch.get("build_branch"), str)
+            or not BRANCH_PATTERN.fullmatch(branch["build_branch"])
+            or not isinstance(branch.get("approved_identity_blob_sha"), str)
+            or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", branch["approved_identity_blob_sha"])):
+        raise ConflictError("GDK build branch name or approved Identity blob invalid")
     return {
         "schema_version": 1,
         "status": "GDK_MSIXVC2_RECHECK_PASS",
@@ -72,6 +98,9 @@ def recheck(
         "cas_commit_sha": current["cas_commit_sha"],
         "factory_head_sha": current["factory_head_sha"],
         "verified_receipt_sha256": hashlib.sha256(raw).hexdigest(),
+        "build_branch": branch["build_branch"],
+        "approved_identity_blob_sha": branch["approved_identity_blob_sha"],
+        "product_history_gate": branch["product_history_gate"],
         "staging_files_sha256": current["staging_files_sha256"],
         "next_stage": "WINDOWS_GDK_SDK_VALIDATE_THEN_MAKEPKG_MSIXVC2",
         "gdk_sdk_validated": False,
