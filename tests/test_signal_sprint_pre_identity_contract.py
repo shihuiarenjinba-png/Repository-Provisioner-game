@@ -150,5 +150,34 @@ class SignalSprintContractTests(unittest.TestCase):
             self.assertEqual((src.calls, build.calls, gh.calls), (1, 1, 0))
 
 
+    def test_missing_or_invalid_resume_exe_preserves_pinned_ledger(self):
+        # A filesystem failure is a conflict with previously pinned evidence,
+        # not a fresh HOLD that may overwrite the immutable EXE checkpoint.
+        for corruption in ("missing", "truncated"):
+            with self.subTest(corruption=corruption):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    src, build, gh = FakeSource(), FakeBuilder(), NoGithub()
+                    p = Provisioner(ProductConfig.load(ROOT / "config.json"),
+                                    root / "state", root / "work",
+                                    source=src, builder=build, github=gh)
+                    held = p.run(job(False))
+                    self.assertEqual(held["status"], "HOLD")
+                    prior = root / "resume-result.json"
+                    prior.write_text(json.dumps(held), encoding="utf-8")
+                    if corruption == "missing":
+                        build.path.unlink()
+                    else:
+                        build.path.write_bytes(b"truncated PE")
+                    p.resume_result = prior
+                    rejected = p.run(job(False), apply=True)
+                    self.assertEqual((rejected["status"], rejected["next_stage"]),
+                                     ("CONFLICT", "RECONCILE_CONFLICT"))
+                    self.assertEqual(
+                        p.ledger.read(REQUEST_ID)["response"]["package"]["sha256"],
+                        held["package"]["sha256"])
+                    self.assertEqual((src.calls, build.calls, gh.calls), (1, 1, 0))
+
+
 if __name__ == "__main__":
     unittest.main()
