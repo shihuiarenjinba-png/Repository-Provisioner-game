@@ -94,7 +94,7 @@ def verify_handoff(handoff_dir: Path) -> dict:
             original_name in (".", "..") or
             Path(original_name).name != original_name or
             "/" in original_name or "\\" in original_name or
-            not original_name.lower().endswith(".msixvc2")):
+            not original_name.lower().endswith((".msixvc", ".msixvc2"))):
         raise ConflictError("GDK E2E original SDK filename invalid")
     for key in ("package_sha256", "validation_log_sha256",
                 "sdk_result_evidence_sha256", "sdk_pack_plan_sha256"):
