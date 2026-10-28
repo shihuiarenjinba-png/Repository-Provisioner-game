@@ -626,9 +626,6 @@ class OfficialIdentityProvider:
             self._validate_common(raw, job)
             if any(getattr(job, key) != value for key, value in PINNED_SIGNAL_SPRINT_JOB.items()):
                 raise ConflictError("GDK Identity request is not the immutable Signal Sprint product")
-            if any(type(raw.get(key)) is not str or raw[key] != value
-                   for key, value in PINNED_SIGNAL_SPRINT_GDK_IDENTITY.items()):
-                raise ConflictError("GDK Identity differs from the user-reviewed Signal Sprint identifiers")
             if (raw["identity_source"] != GDK_USER_IDENTITY_SOURCE
                     or raw["packaging_family"] != "GDK"):
                 raise HoldError("Invalid GDK identity source or packaging family")
@@ -651,6 +648,11 @@ class OfficialIdentityProvider:
                 raise HoldError("Invalid Xbox SCID")
             if not isinstance(raw["msa_app_id"], str) or not GUID.fullmatch(raw["msa_app_id"]):
                 raise HoldError("Invalid MSA App ID")
+            # Format validation above gives precise HOLD errors. Valid-shaped but
+            # unreviewed identifiers are provenance conflicts, not alternatives.
+            if any(type(raw.get(key)) is not str or raw[key] != value
+                   for key, value in PINNED_SIGNAL_SPRINT_GDK_IDENTITY.items()):
+                raise ConflictError("GDK Identity differs from the user-reviewed Signal Sprint identifiers")
             return raw
 
         if set(raw) != legacy_required:
