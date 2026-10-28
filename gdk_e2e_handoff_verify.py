@@ -41,8 +41,15 @@ def _exact(manifest: dict, key: str, expected) -> None:
         raise ConflictError("GDK E2E handoff mismatch: " + key)
 
 
-def verify_handoff(handoff_dir: Path) -> dict:
-    """Verify an untrusted received folder without changing any of its bytes."""
+def verify_handoff(handoff_dir: Path, expected_manifest_sha256: str) -> dict:
+    """Verify transferred bytes against an independently trusted manifest digest.
+
+    The expected digest MUST arrive out-of-band from the sender, not from the
+    received folder or a sidecar shipped alongside it. Without that trust
+    anchor, an attacker could replace package, log, and manifest together.
+    """
+    if type(expected_manifest_sha256) is not str or not SHA256.fullmatch(expected_manifest_sha256):
+        raise ConflictError("GDK E2E independently trusted manifest SHA-256 required")
     if handoff_dir.is_symlink() or not handoff_dir.is_dir():
         raise HoldError("GDK E2E handoff directory missing or linked")
     root = handoff_dir.resolve(strict=True)
@@ -54,6 +61,8 @@ def verify_handoff(handoff_dir: Path) -> dict:
 
     manifest_path = root / "handoff.json"
     manifest_sha, _ = _hash_file(manifest_path, 1024 * 1024, "GDK handoff manifest")
+    if manifest_sha != expected_manifest_sha256:
+        raise ConflictError("GDK E2E trusted manifest SHA-256 mismatch")
     manifest = _read_json(manifest_path, "GDK handoff manifest")
     if set(manifest) != MANIFEST_FIELDS:
         raise ConflictError("GDK E2E handoff schema unexpected")
@@ -130,6 +139,7 @@ def verify_handoff(handoff_dir: Path) -> dict:
         "package_size_bytes": package_size,
         "validation_log_sha256": log_sha,
         "manifest_sha256": manifest_sha,
+        "independent_manifest_anchor_matched": True,
         "partner_center_selection": "GDK_GAME",
         "package_format": "MSIXVC2",
         "gdk_sdk_validation_independently_verified": False,
@@ -143,9 +153,11 @@ def verify_handoff(handoff_dir: Path) -> dict:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--handoff-dir", required=True, type=Path)
+    parser.add_argument("--expected-manifest-sha256", required=True,
+                        help="Trusted sender digest obtained outside the transferred folder")
     args = parser.parse_args(argv)
     try:
-        result = verify_handoff(args.handoff_dir)
+        result = verify_handoff(args.handoff_dir, args.expected_manifest_sha256)
     except (ConflictError, HoldError, OSError, ValueError, TypeError, KeyError, RuntimeError) as exc:
         print(json.dumps({"status": getattr(exc, "status", "CONFLICT"),
                           "error": str(exc), "real_msix_pass": False,
