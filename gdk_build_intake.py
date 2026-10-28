@@ -69,8 +69,15 @@ def verify_cas_checkout(repo: Path, cas_sha: str, build_sha: str) -> dict:
     if _git(repo, "rev-parse", cas_sha + "^").decode() != source:
         raise ConflictError("GDK CAS commit is not directly based on immutable source")
     _git(repo, "merge-base", "--is-ancestor", cas_sha, build_sha)
+    # The atomic CAS must change only the reviewed Identity file, not product
+    # source. A later build-branch commit must not replace that Identity.
+    changed = _git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", cas_sha)
+    if changed.decode("utf-8") != APPROVED_PATH:
+        raise ConflictError("GDK CAS commit changed files outside approved Identity")
     approved_bytes = _git(repo, "show", cas_sha + ":" + APPROVED_PATH)
     approved = _json(approved_bytes)
+    if _json(_git(repo, "show", build_sha + ":" + APPROVED_PATH)) != approved:
+        raise ConflictError("GDK build HEAD changed approved CAS Identity")
     if set(approved) != APPROVED_FIELDS:
         raise ConflictError("GDK approved Identity schema has missing/extra fields")
     for field, expected in PINNED_SIGNAL_SPRINT_JOB.items():
