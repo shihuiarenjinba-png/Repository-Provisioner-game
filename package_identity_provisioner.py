@@ -39,6 +39,28 @@ PACKAGE_SID = re.compile(r"^S-1-15-2(?:-\d+){7}$")
 GUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 XBOX_TITLE_ID = re.compile(r"^[0-9A-Fa-f]{1,16}$")
 GDK_USER_IDENTITY_SOURCE = "USER_PROVIDED_PARTNER_CENTER"
+# One reviewed GDK product only. A self-consistent but different job/Identity
+# must never be able to CAS an approved-identity.json onto another source.
+PINNED_SIGNAL_SPRINT_JOB = {
+    "request_id": "game-signal-sprint-c058cbf7fe38e02d929c67d047d717ff74bd522e",
+    "product_type": "GAME",
+    "slug": "signal-sprint",
+    "source_factory": "AI-Game-Factory",
+    "source_repository": "shihuiarenjinba-png/AI-Game-Factory",
+    "source_branch": "codex/game-signal-sprint-undo-20261027",
+    "source_sha": "c058cbf7fe38e02d929c67d047d717ff74bd522e",
+}
+PINNED_SIGNAL_SPRINT_GDK_IDENTITY = {
+    "store_id": "9N21MJM7S57P",
+    "name": "OkinawaDesktopTools.SignalSprint",
+    "publisher": "CN=46263F21-A700-41DB-8C9B-114C22FB82FC",
+    "publisher_display_name": "Okinawa Desktop Tools",
+    "package_family_name": "OkinawaDesktopTools.SignalSprint_j8yefg9jgfh58",
+    "package_sid": "S-1-15-2-1437967488-3265478925-1925977903-994526844-2895000717-1943620661-378024715",
+    "xbox_title_id": "68721417",
+    "xbox_scid": "00000000-0000-0000-0000-000068721417",
+    "msa_app_id": "39852fc3-fa46-4bda-88aa-b35385488ced",
+}
 ALLOWED_ACTIONS = {"BUILD_WINDOWS", "INSPECT_PACKAGE", "LOOKUP_OFFICIAL_IDENTITY", "PROPOSE_GITHUB_RETURN"}
 FINAL_STATUSES = {"COMPLETED", "DRY_RUN", "CONFLICT"}
 TRANSIENT_HTTP = {429, 500, 502, 503, 504}
@@ -602,8 +624,11 @@ class OfficialIdentityProvider:
         }
         if set(raw) == gdk_required:
             self._validate_common(raw, job)
-            if job.product_type != "GAME" or job.slug != "signal-sprint":
-                raise HoldError("User-provided GDK identity is only allowed for the pinned GAME product")
+            if any(getattr(job, key) != value for key, value in PINNED_SIGNAL_SPRINT_JOB.items()):
+                raise ConflictError("GDK Identity request is not the immutable Signal Sprint product")
+            if any(type(raw.get(key)) is not str or raw[key] != value
+                   for key, value in PINNED_SIGNAL_SPRINT_GDK_IDENTITY.items()):
+                raise ConflictError("GDK Identity differs from the user-reviewed Signal Sprint identifiers")
             if (raw["identity_source"] != GDK_USER_IDENTITY_SOURCE
                     or raw["packaging_family"] != "GDK"):
                 raise HoldError("Invalid GDK identity source or packaging family")
