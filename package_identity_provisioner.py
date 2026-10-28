@@ -934,18 +934,30 @@ class Provisioner:
             "request_id": job.request_id, "product_type": job.product_type,
             "source_factory": job.source_factory, "source_repository": job.source_repository,
             "source_branch": job.source_branch, "source_sha": job.source_sha, "slug": job.slug,
-            "status": "HOLD", "next_stage": "OBTAIN_AUTHENTICATED_OFFICIAL_IDENTITY",
+            "status": "HOLD",
         }
         if any(raw.get(key) != value for key, value in expected.items()):
-            raise ConflictError("Resume result belongs to another request, source or stage")
+            raise ConflictError("Resume result belongs to another request or source")
         github_return = raw.get("github_return")
         official_identity = raw.get("official_identity")
+        # Both the original pre-Identity HOLD and the reviewed check-only
+        # HOLD are resumable.  The latter must not force a fresh EXE build:
+        # re-read the supplied official Identity on each attempt and use the
+        # pinned ledger/EXE bytes rather than trusting the result JSON.
+        stage = raw.get("next_stage")
+        identity_status = official_identity.get("status") if isinstance(official_identity, dict) else None
+        valid_checkpoint = (
+            (stage == "OBTAIN_AUTHENTICATED_OFFICIAL_IDENTITY"
+             and identity_status == "UNVERIFIED")
+            or (stage == "APPLY_VERIFIED_GITHUB_RETURN"
+                and identity_status in {"USER_PROVIDED_PARTNER_CENTER", "VERIFIED_OPERATOR_EXPORT"})
+        )
         if (self.config.product_type != "GAME"
                 or not isinstance(github_return, dict)
-                or not isinstance(official_identity, dict)
                 or github_return.get("status") != "NOT_APPLIED"
-                or official_identity.get("status") != "UNVERIFIED"):
-            raise ConflictError("Resume result is not a pre-Identity GAME EXE hold")
+                or raw.get("windows_all_auto_record") is not None
+                or not valid_checkpoint):
+            raise ConflictError("Resume result is not a safe pre-CAS GAME EXE hold")
         previous = raw.get("package")
         if not isinstance(previous, dict) or previous.get("kind") != "exe":
             raise ConflictError("Resume result has no verified GAME EXE")
