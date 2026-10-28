@@ -58,9 +58,10 @@ class GdkE2eHandoffVerifyTests(unittest.TestCase):
             "next_stage": "WINDOWS_E2E_INDEPENDENT_GDK_VALIDATION_INSTALL_GUI_QA",
         }
 
-    def check(self):
+    def check(self, expected_manifest_sha256=None):
         self.manifest_path.write_text(json.dumps(self.manifest), encoding="utf-8")
-        return verify_handoff(self.root)
+        anchor = expected_manifest_sha256 or sha(self.manifest_path.read_bytes())
+        return verify_handoff(self.root, anchor)
 
     def test_valid_synthetic_transfer_is_not_sdk_or_e2e_approval(self):
         result = self.check()
@@ -107,7 +108,7 @@ class GdkE2eHandoffVerifyTests(unittest.TestCase):
             encoding="utf-8",
         )
         with self.assertRaisesRegex(ConflictError, "duplicate JSON key"):
-            verify_handoff(self.root)
+            verify_handoff(self.root, sha(self.manifest_path.read_bytes()))
 
     def test_original_sdk_filename_traversal_rejected(self):
         self.manifest["original_sdk_filename"] = "../other.msixvc2"
@@ -123,6 +124,24 @@ class GdkE2eHandoffVerifyTests(unittest.TestCase):
         self.manifest["store_certified"] = True
         with self.assertRaisesRegex(ConflictError, "schema unexpected"):
             self.check()
+
+    def test_missing_independent_anchor_rejected(self):
+        self.manifest_path.write_text(json.dumps(self.manifest), encoding="utf-8")
+        with self.assertRaisesRegex(ConflictError, "independently trusted"):
+            verify_handoff(self.root, None)
+
+    def test_wrong_independent_anchor_rejected(self):
+        with self.assertRaisesRegex(ConflictError, "trusted manifest SHA-256 mismatch"):
+            self.check("f" * 64)
+
+    def test_coordinated_package_and_manifest_replacement_rejected(self):
+        self.manifest_path.write_text(json.dumps(self.manifest), encoding="utf-8")
+        trusted_sender_digest = sha(self.manifest_path.read_bytes())
+        self.package.write_bytes(b"attacker swapped the whole bundle")
+        self.manifest["package_sha256"] = sha(self.package.read_bytes())
+        self.manifest["package_size_bytes"] = self.package.stat().st_size
+        with self.assertRaisesRegex(ConflictError, "trusted manifest SHA-256 mismatch"):
+            self.check(trusted_sender_digest)
 
     def test_bad_version_rejected(self):
         self.manifest["package_version"] = "1.0.99999.0"
