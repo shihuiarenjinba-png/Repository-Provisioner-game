@@ -28,7 +28,7 @@ class GdkBuildIntakeTests(unittest.TestCase):
             **PINNED_SIGNAL_SPRINT_JOB, **PINNED_SIGNAL_SPRINT_GDK_IDENTITY,
             "schema_version": "1.0", "reviewed": True,
             "verified_source_sha": SOURCE, "package_sha256": self.exe_sha,
-            "signature_status": "NOTSIGNED", "source": "partner_center_user_provided",
+            "signature_status": "QA_UNSIGNED", "source": "partner_center_user_provided",
             "identity_source": "USER_PROVIDED_PARTNER_CENTER",
             "packaging_family": "GDK", "provided_at": "2026-10-28T10:49:00+09:00",
         }
@@ -60,6 +60,10 @@ class GdkBuildIntakeTests(unittest.TestCase):
 
     def fake_git(self, repo, *args):
         self.calls.append(args)
+        if args == ("rev-parse", "refs/heads/" + PINNED_SIGNAL_SPRINT_JOB["source_branch"]):
+            return SOURCE.encode()
+        if args == ("rev-list", "--parents", "-n", "1", CAS):
+            return (CAS + " " + SOURCE).encode()
         if args == ("rev-parse", "HEAD"):
             return BUILD.encode()
         if args == ("rev-parse", CAS + "^"):
@@ -85,6 +89,35 @@ class GdkBuildIntakeTests(unittest.TestCase):
         self.assertFalse(result["real_msixvc_built"])
         self.assertFalse(result["store_submitted"])
         self.assertIn(("merge-base", "--is-ancestor", CAS, BUILD), self.calls)
+
+    def test_moved_immutable_source_ref_rejected(self):
+        original = self.fake_git
+
+        def moved_source(repo, *args):
+            if args == ("rev-parse", "refs/heads/" + PINNED_SIGNAL_SPRINT_JOB["source_branch"]):
+                return ("f" * 40).encode()
+            return original(repo, *args)
+
+        with patch.object(intake, "_git", side_effect=moved_source):
+            with self.assertRaisesRegex(ConflictError, "source branch moved"):
+                intake.create_intake(self.root, self.zip, CAS, BUILD)
+
+    def test_merge_cas_rejected_even_with_correct_first_parent(self):
+        original = self.fake_git
+
+        def merged_cas(repo, *args):
+            if args == ("rev-list", "--parents", "-n", "1", CAS):
+                return (CAS + " " + SOURCE + " " + "f" * 40).encode()
+            return original(repo, *args)
+
+        with patch.object(intake, "_git", side_effect=merged_cas):
+            with self.assertRaisesRegex(ConflictError, "single-parent"):
+                intake.create_intake(self.root, self.zip, CAS, BUILD)
+
+    def test_false_signed_claim_rejected(self):
+        self.approved["signature_status"] = "SIGNED"
+        with self.assertRaisesRegex(ConflictError, "QA_UNSIGNED"):
+            intake.create_intake(self.root, self.zip, CAS, BUILD)
 
     def test_wrong_approved_identity_rejected(self):
         self.approved["store_id"] = "9N21MJM7S57Q"
@@ -132,12 +165,12 @@ class GdkBuildIntakeTests(unittest.TestCase):
         original = self.fake_git
 
         def wrong_parent(repo, *args):
-            if args == ("rev-parse", CAS + "^"):
-                return ("f" * 40).encode()
+            if args == ("rev-list", "--parents", "-n", "1", CAS):
+                return (CAS + " " + "f" * 40).encode()
             return original(repo, *args)
 
         with patch.object(intake, "_git", side_effect=wrong_parent):
-            with self.assertRaisesRegex(ConflictError, "directly based"):
+            with self.assertRaisesRegex(ConflictError, "single-parent"):
                 intake.create_intake(self.root, self.zip, CAS, BUILD)
 
     def test_cas_must_change_only_identity(self):
