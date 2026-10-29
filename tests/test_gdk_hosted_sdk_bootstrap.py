@@ -10,6 +10,55 @@ from package_identity_provisioner import ConflictError, HoldError
 
 
 class HostedBootstrapTests(unittest.TestCase):
+    def test_catalog_probe_extracts_only_unapproved_2610_candidates(self):
+        sample = "Version\n2610.0.8000\n2604.0.7500\n2610.0.8000\n2610.1.8100\n"
+        with mock.patch.object(bootstrap.subprocess, "run",
+                               return_value=mock.Mock(returncode=0, stdout=sample)) as run:
+            result = bootstrap._probe_versions(Path("C:/approved/winget.exe"))
+        self.assertEqual(result["catalog_query_status"], "CANDIDATES_FOUND")
+        self.assertEqual(result["unapproved_version_candidates"],
+                         ["2610.0.8000", "2610.1.8100"])
+        command = run.call_args.args[0]
+        self.assertEqual(command[1], "show")
+        self.assertIn("--versions", command)
+        self.assertNotIn("install", command)
+
+    def test_catalog_failure_does_not_claim_version_approval(self):
+        with mock.patch.object(bootstrap.subprocess, "run",
+                               return_value=mock.Mock(returncode=1, stdout="2610.0.8000")):
+            result = bootstrap._probe_versions(Path("C:/approved/winget.exe"))
+        self.assertEqual(result["catalog_query_status"], "FAILED")
+        self.assertEqual(result["unapproved_version_candidates"], [])
+
+    def test_catalog_timeout_fails_closed_without_install(self):
+        with mock.patch.object(bootstrap.subprocess, "run",
+                               side_effect=bootstrap.subprocess.TimeoutExpired("winget", 90)):
+            result = bootstrap._probe_versions(Path("C:/approved/winget.exe"))
+        self.assertEqual(result["catalog_query_status"], "UNAVAILABLE")
+        self.assertEqual(result["unapproved_version_candidates"], [])
+
+    def test_windows_probe_versions_never_installs_sdk(self):
+        with mock.patch.object(bootstrap.sys, "platform", "win32"), \
+             mock.patch.object(bootstrap, "_winget", return_value=Path("C:/approved/winget.exe")), \
+             mock.patch.object(bootstrap, "_probe_versions",
+                               return_value={"catalog_query_status": "CANDIDATES_FOUND",
+                                             "unapproved_version_candidates": ["2610.0.8000"]}) as query:
+            result = bootstrap.bootstrap(probe_versions=True)
+        query.assert_called_once()
+        self.assertEqual(result["status"], "GDK_HOSTED_WINGET_PROBE_ONLY")
+        self.assertFalse(result["sdk_installed_by_this_run"])
+        self.assertFalse(result["real_msix_pass"])
+        self.assertEqual(result["unapproved_version_candidates"], ["2610.0.8000"])
+
+    def test_missing_winget_catalog_probe_never_executes_subprocess(self):
+        with mock.patch.object(bootstrap.sys, "platform", "win32"), \
+             mock.patch.object(bootstrap, "_winget", return_value=None), \
+             mock.patch.object(bootstrap.subprocess, "run") as run:
+            result = bootstrap.bootstrap(probe_versions=True)
+        self.assertEqual(result["catalog_query_status"], "WINGET_UNAVAILABLE")
+        self.assertEqual(result["unapproved_version_candidates"], [])
+        run.assert_not_called()
+
     def test_non_windows_probe_never_installs(self):
         with mock.patch.object(bootstrap.sys, "platform", "linux"):
             result = bootstrap.bootstrap()
