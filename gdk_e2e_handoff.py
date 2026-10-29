@@ -15,7 +15,8 @@ import stat
 import sys
 
 from gdk_sdk_result_intake import (
-    MAX_JSON, MAX_LOG, MAX_PACKAGE, _hash_file, _read_json, intake,
+    MAX_JSON, MAX_LOG, MAX_PACKAGE, MAX_SIDECAR, MAX_OUTPUT_FILES,
+    _hash_file, _read_json, intake,
 )
 from package_identity_provisioner import (
     ConflictError, HoldError, PINNED_SIGNAL_SPRINT_GDK_IDENTITY,
@@ -79,6 +80,17 @@ def export_handoff(plan_path: Path, evidence_path: Path, package_dir: Path,
     package_sha, package_size = verified["package_sha256"], verified["package_size_bytes"]
     log_sha = verified["validation_log_sha256"]
     log_size = validation_log.stat().st_size
+    inventory = verified["output_files_sha256"]
+    sidecar_names = sorted(set(inventory) - {filename})
+    if len(sidecar_names) > MAX_OUTPUT_FILES - 1:
+        raise ConflictError("GDK SDK sidecar count exceeds limit")
+    # Preserve original names with a collision-free transfer prefix.
+    sidecars = {}
+    for name in sidecar_names:
+        transferred = "sdk-sidecar-" + name
+        if len(transferred) > 240:
+            raise ConflictError("GDK SDK sidecar transfer name too long")
+        sidecars[transferred] = inventory[name]
     if _hash_file(plan_path, MAX_JSON, "GDK plan")[0] != plan_sha or (
         _hash_file(evidence_path, MAX_JSON, "GDK SDK result")[0] != evidence_sha
     ):
@@ -101,11 +113,18 @@ def export_handoff(plan_path: Path, evidence_path: Path, package_dir: Path,
                        package_sha, package_size, MAX_PACKAGE, "GDK package")
         _copy_verified(validation_log, target / "validation.log",
                        log_sha, log_size, MAX_LOG, "GDK validation log")
+        for name in sidecar_names:
+            source = package_root / name
+            transferred = "sdk-sidecar-" + name
+            _copy_verified(source, target / transferred, inventory[name],
+                           source.stat().st_size, MAX_SIDECAR, "GDK SDK sidecar")
+        if {p.name for p in package_root.iterdir()} != set(inventory):
+            raise ConflictError("GDK SDK output changed during handoff")
         if (_hash_file(plan_path, MAX_JSON, "GDK plan")[0] != plan_sha
                 or _hash_file(evidence_path, MAX_JSON, "GDK SDK result")[0] != evidence_sha):
             raise ConflictError("GDK evidence changed during handoff")
         manifest = {
-            "schema_version": 1,
+            "schema_version": 2,
             "status": "GDK_E2E_QA_INTAKE_PENDING",
             "type": "game",
             "partner_center_selection": "GDK_GAME",
@@ -125,6 +144,7 @@ def export_handoff(plan_path: Path, evidence_path: Path, package_dir: Path,
             "package_size_bytes": package_size,
             "validation_log_filename": "validation.log",
             "validation_log_sha256": log_sha,
+            "sdk_sidecars_sha256": dict(sorted(sidecars.items())),
             "sdk_result_evidence_sha256": evidence_sha,
             "sdk_pack_plan_sha256": plan_sha,
             "sdk_version_claim": verified["sdk_version_claim"],
@@ -138,15 +158,14 @@ def export_handoff(plan_path: Path, evidence_path: Path, package_dir: Path,
         with (target / "handoff.json").open("x", encoding="utf-8") as writer:
             json.dump(manifest, writer, ensure_ascii=False, sort_keys=True, indent=2)
             writer.write("\n")
-        if set(p.name for p in target.iterdir()) != {
-            "package.msixvc2", "validation.log", "handoff.json"
-        }:
+        if set(p.name for p in target.iterdir()) != (
+            {"package.msixvc2", "validation.log", "handoff.json"} | set(sidecars)
+        ):
             raise ConflictError("GDK handoff contains unexpected files")
         return manifest
     except BaseException:
         # Only the freshly-created destination belongs to this operation.
-        for name in ("handoff.json", "validation.log", "package.msixvc2"):
-            path = target / name
+        for path in target.iterdir():
             if path.is_file() or path.is_symlink():
                 path.unlink()
         target.rmdir()
