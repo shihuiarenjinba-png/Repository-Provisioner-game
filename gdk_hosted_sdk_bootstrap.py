@@ -133,6 +133,8 @@ def bootstrap(*, install: bool = False, probe_versions: bool = False, sdk_versio
         "e2e_pass": False,
         "store_submitted": False,
     }
+    if install and probe_versions:
+        raise HoldError("GDK probe and install modes cannot be combined")
     if sys.platform != "win32":
         if install:
             raise HoldError("GDK bootstrap installation requires Windows")
@@ -151,6 +153,12 @@ def bootstrap(*, install: bool = False, probe_versions: bool = False, sdk_versio
             or os.environ.get("RUNNER_OS") != "Windows"
             or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted"):
         raise HoldError("GDK installation allowed only on GitHub-hosted Windows")
+    # GitHub-hosted Windows alone is not authorization: push/PR jobs have
+    # the same runner environment. Require an explicit manual dispatch with
+    # the workflow's install_sdk input set to true before any WinGet install.
+    if (os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch"
+            or os.environ.get("INSTALL_REQUESTED", "").lower() != "true"):
+        raise HoldError("GDK installation requires manual workflow_dispatch with install_sdk=true")
     if type(sdk_version) is not str or not OCTOBER_GDK.fullmatch(sdk_version):
         raise HoldError("explicit October 2026 GDK 2610.x version pin required")
     if (type(approved_makepkg_sha256) is not str
