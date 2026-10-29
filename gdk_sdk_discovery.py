@@ -8,7 +8,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import platform
-import shutil
 import stat
 
 from package_identity_provisioner import ConflictError, HoldError
@@ -16,12 +15,8 @@ from package_identity_provisioner import ConflictError, HoldError
 
 def _candidates() -> list[Path]:
     paths: list[Path] = []
-    on_path = shutil.which("makepkg.exe")
-    if on_path:
-        paths.append(Path(on_path))
-    # shutil.which returns only the FIRST PATH hit. A second installed SDK
-    # must not be silently ignored: enumerate bounded, explicit PATH entries.
-    # Empty/relative entries are deliberately ignored (no current-dir lookup).
+    # Never use shutil.which: Windows may search the current working directory
+    # or relative PATH entries. Enumerate only explicit absolute PATH roots.
     for entry in os.environ.get("PATH", "").split(";"):
         directory = Path(entry.strip().strip('"'))
         if entry.strip() and directory.is_absolute():
@@ -29,16 +24,23 @@ def _candidates() -> list[Path]:
     for name in ("GameDK", "GameDKCoreLatest"):
         root = os.environ.get(name)
         if root:
+            if not Path(root).is_absolute():
+                raise ConflictError(f"{name} GDK root must be absolute")
             paths.append(Path(root) / "bin" / "makepkg.exe")
     gdk_bin = os.environ.get("GDK_BIN")
     if gdk_bin:
+        if not Path(gdk_bin).is_absolute():
+            raise ConflictError("GDK_BIN root must be absolute")
         paths.append(Path(gdk_bin) / "makepkg.exe")
     program_files = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
-    paths.append(Path(program_files) / "Microsoft GDK" / "bin" / "makepkg.exe")
+    if Path(program_files).is_absolute():
+        paths.append(Path(program_files) / "Microsoft GDK" / "bin" / "makepkg.exe")
     return paths
 
 
 def _regular_executable(path: Path) -> Path | None:
+    if not path.is_absolute():
+        raise ConflictError("GDK makepkg path must be absolute")
     # Missing candidates are normal; linked or special files are not.
     if not path.exists() and not path.is_symlink():
         return None
