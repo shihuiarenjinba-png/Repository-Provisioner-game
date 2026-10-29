@@ -201,6 +201,24 @@ def run_windows_pack(*, factory_checkout: Path, artifact_zip: Path, cas_sha: str
         checked = intake(pack_plan, result_evidence, output_dir, validation_log)
         if checked["status"] != "GDK_PACKAGE_BYTES_AND_SDK_RECEIPT_CHECK_PASS":
             raise ConflictError("GDK SDK strict intake did not pass")
+        # The intake can take minutes for large MSIXVC2 packages. Do not trust a
+        # receipt if the independent CAS/staging gate, package, or log changed
+        # while that intake was hashing bytes. Any failure removes the receipt.
+        final_post = recheck(factory_checkout, artifact_zip, cas_sha, build_sha,
+                             staging_dir, package_version, reviewed_display_name,
+                             preflight_receipt)
+        _ensure_equal(final_post, post, "post-intake CAS/staging evidence")
+        final_name, final_inventory, final_size = _scan_sdk_output(output_dir)
+        if (final_name != filename or final_inventory != inventory
+                or final_size != size
+                or checked.get("output_files_sha256") != inventory
+                or checked.get("package_sha256") != inventory[filename]
+                or checked.get("validation_log_sha256") != log_sha):
+            raise ConflictError("GDK SDK output changed during trusted intake")
+        if _hash_file(validation_log, MAX_LOG, "GDK SDK validation log")[0] != log_sha:
+            raise ConflictError("GDK SDK log changed during trusted intake")
+        if _hash_file(sdk_handoff, MAX_JSON, "GDK SDK trusted handoff")[0] != trusted_handoff_sha256:
+            raise ConflictError("GDK SDK handoff changed during trusted intake")
     except BaseException:
         result_evidence.unlink(missing_ok=True)
         raise
