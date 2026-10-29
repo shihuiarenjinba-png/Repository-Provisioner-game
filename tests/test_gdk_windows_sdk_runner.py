@@ -131,7 +131,7 @@ class GdkWindowsSdkRunnerTests(unittest.TestCase):
 
     def _run_with_intake_mutation(self, mutate=None, changed_recheck=False):
         package_bytes = b"original synthetic package"
-        log_bytes = b"synthetic SDK output, not validation\\n"
+        log_bytes = b"synthetic SDK output, not validation\n"
         original_inventory = {"SignalSprint.msixvc": sha(package_bytes)}
         initial_post = {
             "staging_files_sha256": self.plan["staging_files_sha256"],
@@ -159,11 +159,11 @@ class GdkWindowsSdkRunnerTests(unittest.TestCase):
         recheck_results = [initial_post, changed_post if changed_recheck else initial_post]
         a, b = self.patches()
         with a, b, mock.patch("gdk_windows_sdk_runner._sdk_executable",
-                              return_value=self.fake_makepkg), \\
+                              return_value=self.fake_makepkg), \
              mock.patch("gdk_windows_sdk_runner.subprocess.run",
-                        side_effect=fake_sdk), \\
+                        side_effect=fake_sdk), \
              mock.patch("gdk_windows_sdk_runner.recheck",
-                        side_effect=recheck_results), \\
+                        side_effect=recheck_results), \
              mock.patch("gdk_windows_sdk_runner.intake",
                         side_effect=fake_intake):
             with self.assertRaises(ConflictError):
