@@ -243,6 +243,12 @@ class GdkTrustedE2eExportTests(unittest.TestCase):
         with self.assertRaisesRegex(ConflictError, "inventory changed before export"):
             _verify_source_inventory(self.trusted, self.package_dir)
 
+    def test_original_sdk_package_digest_claim_swap_rejected(self):
+        self.seed_real_sdk_inventory()
+        self.trusted["package_sha256"] = "0" * 64
+        with self.assertRaisesRegex(ConflictError, "package digest claim mismatch"):
+            _verify_source_inventory(self.trusted, self.package_dir)
+
     def test_original_sdk_inventory_digest_forgery_rejected(self):
         self.seed_real_sdk_inventory()
         self.trusted["output_files_sha256"]["symbols.zip"] = "not-a-sha"
