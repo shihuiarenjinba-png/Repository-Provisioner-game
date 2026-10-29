@@ -11,12 +11,10 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
-import platform
-import shutil
-import stat
 import subprocess
 import sys
 
+from gdk_sdk_discovery import discover_makepkg
 from gdk_sdk_handoff_gate import create_sdk_handoff
 from gdk_sdk_result_intake import (
     MAX_JSON, MAX_LOG, MAX_OUTPUT_FILES, MAX_PACKAGE, MAX_SIDECAR,
@@ -37,16 +35,8 @@ def _ensure_equal(actual: dict, expected: dict, label: str) -> None:
         raise ConflictError("GDK Windows runner: " + label + " changed")
 
 
-def _sdk_executable() -> Path:
-    if platform.system() != "Windows":
-        raise HoldError("GDK SDK execution requires local Windows")
-    found = shutil.which("makepkg.exe")
-    if not found:
-        raise HoldError("GDK makepkg.exe not found on PATH")
-    path = Path(found)
-    if path.is_symlink() or not stat.S_ISREG(path.lstat().st_mode):
-        raise ConflictError("GDK makepkg executable is linked or not regular")
-    return path.resolve(strict=True)
+def _sdk_executable(explicit_path: Path | None = None) -> Path:
+    return discover_makepkg(explicit_path)
 
 
 def _scan_sdk_output(output: Path) -> tuple[str, dict[str, str], int]:
@@ -120,7 +110,8 @@ def run_windows_pack(*, factory_checkout: Path, artifact_zip: Path, cas_sha: str
                      pack_plan: Path, sdk_version_claim: str,
                      validation_log: Path, result_evidence: Path,
                      execute: bool = False, timeout_seconds: int = 3600,
-                     trusted_makepkg_sha256: str | None = None) -> dict:
+                     trusted_makepkg_sha256: str | None = None,
+                     makepkg_path: Path | None = None) -> dict:
     """Recheck immutable inputs and optionally execute the SDK without shell."""
     if type(trusted_handoff_sha256) is not str or not SHA256.fullmatch(trusted_handoff_sha256):
         raise HoldError("independent GDK SDK handoff SHA-256 required")
@@ -174,7 +165,7 @@ def run_windows_pack(*, factory_checkout: Path, artifact_zip: Path, cas_sha: str
     if (type(trusted_makepkg_sha256) is not str
             or not SHA256.fullmatch(trusted_makepkg_sha256)):
         raise HoldError("independent approved makepkg.exe SHA-256 required for execution")
-    executable = _sdk_executable()
+    executable = _sdk_executable() if makepkg_path is None else _sdk_executable(makepkg_path)
     if _hash_file(executable, 512 * 1024 * 1024, "GDK makepkg.exe")[0] != trusted_makepkg_sha256:
         raise ConflictError("GDK makepkg.exe differs from independently approved bytes")
     # make_pack_plan verified an empty output earlier, but the directory can
@@ -262,6 +253,7 @@ def main(argv=None) -> int:
         parser.add_argument("--" + name, required=True)
     parser.add_argument("--execute", action="store_true", help="Explicitly authorize local GDK SDK packaging")
     parser.add_argument("--trusted-makepkg-sha256", help="Independently approved SDK executable digest; required with --execute")
+    parser.add_argument("--makepkg-path", type=Path, help="Optional explicit SDK executable when discovery finds multiple versions")
     parser.add_argument("--timeout-seconds", type=int, default=3600)
     args = parser.parse_args(argv)
     try:
@@ -278,6 +270,7 @@ def main(argv=None) -> int:
             validation_log=args.validation_log, result_evidence=args.result_evidence,
             execute=args.execute, timeout_seconds=args.timeout_seconds,
             trusted_makepkg_sha256=args.trusted_makepkg_sha256,
+            makepkg_path=args.makepkg_path,
         )
     except (ConflictError, HoldError, OSError, ValueError, TypeError, KeyError,
             RuntimeError, subprocess.SubprocessError) as exc:
