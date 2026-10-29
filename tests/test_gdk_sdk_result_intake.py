@@ -59,6 +59,7 @@ class GdkSdkResultIntakeTests(unittest.TestCase):
             "package_filename": self.package.name,
             "package_sha256": sha(self.package.read_bytes()),
             "package_size_bytes": self.package.stat().st_size,
+            "output_files_sha256": {self.package.name: sha(self.package.read_bytes())},
         })
 
     def check(self):
@@ -115,8 +116,57 @@ class GdkSdkResultIntakeTests(unittest.TestCase):
 
     def test_extra_output_rejected(self):
         (self.output / "extra.msixvc2").write_bytes(b"bad")
-        with self.assertRaisesRegex(ConflictError, "exactly one"):
+        with self.assertRaisesRegex(ConflictError, "inventory"):
             self.check()
+
+    def test_sdk_sidecars_are_hashed_without_claiming_real_build(self):
+        sidecars = {
+            "SignalSprint.ekb": b"synthetic EKB",
+            "SubmissionValidator.xml": b"<synthetic/>",
+            "symbols.zip": b"synthetic symbols",
+        }
+        for name, payload in sidecars.items():
+            (self.output / name).write_bytes(payload)
+            self.evidence["output_files_sha256"][name] = sha(payload)
+        receipt = self.check()
+        self.assertEqual(receipt["sdk_output_sidecar_count"], 3)
+        self.assertEqual(set(receipt["output_files_sha256"]), set(sidecars) | {self.package.name})
+        self.assertIs(receipt["real_msix_pass"], False)
+
+    def test_sidecar_tampering_rejected(self):
+        extra = self.output / "SubmissionValidator.xml"
+        extra.write_bytes(b"first")
+        self.evidence["output_files_sha256"][extra.name] = sha(b"first")
+        extra.write_bytes(b"changed")
+        with self.assertRaisesRegex(ConflictError, "sidecar bytes"):
+            self.check()
+
+    def test_unreviewed_sidecar_extension_rejected(self):
+        extra = self.output / "unexpected.exe"
+        extra.write_bytes(b"not SDK evidence")
+        self.evidence["output_files_sha256"][extra.name] = sha(extra.read_bytes())
+        with self.assertRaisesRegex(ConflictError, "unreviewed sidecar"):
+            self.check()
+
+    def test_second_package_rejected(self):
+        extra = self.output / "second.msixvc"
+        extra.write_bytes(b"other package")
+        self.evidence["output_files_sha256"][extra.name] = sha(extra.read_bytes())
+        with self.assertRaisesRegex(ConflictError, "unreviewed sidecar"):
+            self.check()
+
+    def test_missing_sidecar_inventory_rejected(self):
+        (self.output / "SubmissionValidator.xml").write_bytes(b"validator")
+        with self.assertRaisesRegex(ConflictError, "inventory"):
+            self.check()
+
+    def test_legacy_extension_valid_for_msixvc2_output(self):
+        # Microsoft documents the MSIXVC2 package as <package>.msixvc.
+        legacy = self.output / "SignalSprint.msixvc"
+        self.package.rename(legacy)
+        self.evidence["package_filename"] = legacy.name
+        self.evidence["output_files_sha256"] = {legacy.name: sha(legacy.read_bytes())}
+        self.assertEqual(self.check()["package_filename"], legacy.name)
 
     def test_unexpected_schema_rejected(self):
         self.evidence["certified"] = True
