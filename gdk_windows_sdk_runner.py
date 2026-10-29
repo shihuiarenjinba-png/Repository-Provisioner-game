@@ -146,6 +146,10 @@ def run_windows_pack(*, factory_checkout: Path, artifact_zip: Path, cas_sha: str
                                 staging_dir, package_version, reviewed_display_name,
                                 preflight_receipt, output_dir)
     _ensure_equal(plan, fresh_plan, "SDK pack plan")
+    # Pin the raw plan file, not just its parsed JSON. A rewritten plan during
+    # long SDK execution/intake must invalidate the receipt even if the fields
+    # are semantically equivalent.
+    plan_file_sha = _hash_file(pack_plan, MAX_JSON, "GDK SDK pack plan")[0]
     if validation_log.exists() or validation_log.is_symlink() or result_evidence.exists() or result_evidence.is_symlink():
         raise ConflictError("GDK SDK output evidence destination must not exist")
     if validation_log.resolve() == result_evidence.resolve():
@@ -219,6 +223,10 @@ def run_windows_pack(*, factory_checkout: Path, artifact_zip: Path, cas_sha: str
             raise ConflictError("GDK SDK log changed during trusted intake")
         if _hash_file(sdk_handoff, MAX_JSON, "GDK SDK trusted handoff")[0] != trusted_handoff_sha256:
             raise ConflictError("GDK SDK handoff changed during trusted intake")
+        if _hash_file(pack_plan, MAX_JSON, "GDK SDK pack plan")[0] != plan_file_sha:
+            raise ConflictError("GDK SDK pack plan changed during trusted intake")
+        if _hash_file(executable, 512 * 1024 * 1024, "GDK makepkg.exe")[0] != trusted_makepkg_sha256:
+            raise ConflictError("GDK makepkg.exe changed during trusted intake")
     except BaseException:
         result_evidence.unlink(missing_ok=True)
         raise
