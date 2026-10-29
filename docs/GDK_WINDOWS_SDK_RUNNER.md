@@ -9,7 +9,7 @@ The check-only CLI gdk_windows_sdk_runner.py bridges the existing immutable Fact
 1. Factory source branch remains at c058cbf7fe38e02d929c67d047d717ff74bd522e; actual CAS and dedicated GDK build branch must be independently verified. Never use placeholder CAS SHA values.
 2. The pinned ZIP/EXE are unchanged. The SDK handoff SHA-256 must be supplied through a separate trusted channel, not from the same handoff folder.
 3. The reviewed reserved display name and package version are available. Neither is inferred from the Identity Name.
-4. On local Windows, the installed GDK's makepkg.exe is on PATH, and its SHA-256 has been independently approved. The SDK version string is a claim, not independent validation.
+4. On an authorized Windows machine, the installed GDK's makepkg.exe is discoverable via PATH, GameDK/bin, GameDKCoreLatest/bin, GDK_BIN, or Program Files (x86)/Microsoft GDK/bin. Multiple distinct candidates cause HOLD; select one with --makepkg-path. Its SHA-256 MUST be independently approved. Discovery is never approval. The SDK version string is a claim, not independent validation.
 5. Output directory is empty and isolated. SDK log and result-evidence destinations do not exist and are outside Factory/staging/output. Use fresh paths for retries. Never reuse partially failed output.
 
 ## Check-only first
@@ -36,8 +36,11 @@ Run gdk_windows_sdk_runner.py with the following arguments, using actual indepen
 
 A successful check-only response is GDK_WINDOWS_SDK_EXECUTION_CHECK_ONLY_READY. It does not create a package or approve anything.
 
-Only on a reviewed local Windows machine, repeat with --execute and --trusted-makepkg-sha256 INDEPENDENTLY_APPROVED_MAKEPKG_EXE_SHA256. The script re-derives the dual gate and pack plan, hashes the executable, invokes the exact reviewed argument vector without a shell, records SDK output, rechecks Factory/staging, and emits strict SDK result evidence only after byte verification. Failures do not produce a trusted success receipt; any output left from unsuccessful execution is untrusted and must not be consumed.
+Only on a reviewed Windows machine, repeat with --execute and --trusted-makepkg-sha256 INDEPENDENTLY_APPROVED_MAKEPKG_EXE_SHA256. If multiple installed SDK versions are detected, add --makepkg-path PATH_TO_REVIEWED_MAKEPKG_EXE; this path is still checked against the independent SHA-256. No SDK is installed, downloaded, or executed during check-only. The script re-derives the dual gate and pack plan, hashes the executable, invokes the exact reviewed argument vector without a shell, records SDK output, rechecks Factory/staging, and emits strict SDK result evidence only after byte verification. Failures do not produce a trusted success receipt; any output left from unsuccessful execution is untrusted and must not be consumed.
 
 GDK_WINDOWS_SDK_OUTPUT_INTAKE_CHECK_PASS attests only to local bytes and a claimed SDK exit code. real_msix_pass, e2e_pass, gdk_sdk_validation_independently_verified, and store_submitted remain false. Next owners must independently run gdk_sdk_trusted_intake.py, gdk_e2e_trusted_export.py, Windows install/GUI QA, and Store gates.
 
 tests/test_gdk_windows_sdk_runner.py uses synthetic SDK output and a mocked executable; it never calls real GDK or Partner Center. This PR cannot count as REAL_MSIX_PASS without actual Windows SDK evidence.
+
+
+Discovery unit tests: tests/test_gdk_sdk_discovery.py. These exercise PATH-independent roots, ambiguity, explicit selection, and unsafe linked candidates without a real GDK.
