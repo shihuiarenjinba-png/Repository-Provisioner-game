@@ -13,7 +13,7 @@ makepkg.exe pack /msixvc2 ... /validationcritical command.
 Save four inputs separately:
 1. Original check-only pack-plan JSON.
 2. SDK result evidence JSON (exact schema below).
-3. Package output directory with exactly one real .msixvc or .msixvc2 file.
+3. Package output directory with exactly one real .msixvc or .msixvc2 package, plus any SDK-generated EKB, validator XML/log or symbol ZIP sidecars. All files must be included in the output SHA inventory.
 4. Raw SDK validation log outside the output directory.
 
 Run (read-only; no GDK SDK invocation):
@@ -40,11 +40,15 @@ The result JSON requires **exactly** these fields:
 | package_filename | Basename of one .msixvc/.msixvc2 output |
 | package_sha256 | SHA-256 of actual package bytes |
 | package_size_bytes | Actual package byte length |
+| output_files_sha256 | SHA-256 inventory of every file in the SDK output directory, including the package and permitted .ekb/.xml/.zip/.log/.json sidecars; no unlisted files |
 | store_submitted | false |
 
 Unexpected keys, duplicate JSON keys, wrong source/CAS/build correlations,
-incorrect package/log SHA, symlinks, path traversal, extra output files,
-altered SDK command lines and false Store-submission claims are rejected.
+incorrect package/log/sidecar SHA, symlinks, path traversal, unlisted output files,
+second packages, unsupported sidecars, altered SDK command lines and false
+Store-submission claims are rejected. Sidecars remain evidence only, not a
+claim of SDK authenticity or a Store upload authorization. MSIXVC2 packages
+can use the `.msixvc` extension; the `/msixvc2` command flag defines format.
 Original EXE SHA and six-file staging provenance remain enforced by the
 existing preflight/recheck chain; do not rebuild or replace that EXE.
 
@@ -62,3 +66,14 @@ separate release gate. Do not edit its central E2E ledger in this lane.
 No new GAME, CAS, Store submission, main/release mutation, force push,
 certificate-store or Code Integrity policy changes. Never switch to
 ordinary MSIX/PWA Partner Center routing.
+
+## October 2026 GDK sidecar compatibility
+
+Microsoft's managed `makepkg.exe` can place an EKB, Submission Validator log,
+and symbol bundle alongside a package. A receiver that insists on an output
+folder containing only one file may reject a legitimate SDK build. The
+`output_files_sha256` inventory binds **all** output files to the builder's
+receipt, while requiring exactly one package and rejecting unlisted or changed
+sidecars. This remains a builder claim, not independent SDK attestation.
+
+Reference: https://learn.microsoft.com/en-us/gaming/gdk/docs/features/common/packaging/deployment/makepkg?view=gdk-2604
