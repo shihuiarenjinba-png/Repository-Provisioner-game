@@ -16,6 +16,8 @@ class DiscoveryTests(unittest.TestCase):
         self.root = Path(temp.name)
         self.env = mock.patch.dict(os.environ, {}, clear=True)
         self.env.start()
+        # Do not discover a real SDK installed on the CI host during unit tests.
+        os.environ["ProgramFiles(x86)"] = str(self.root / "empty-program-files")
         self.addCleanup(self.env.stop)
         self.os_patch = mock.patch("gdk_sdk_discovery.platform.system", return_value="Windows")
         self.os_patch.start()
