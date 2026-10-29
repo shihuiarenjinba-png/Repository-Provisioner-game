@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - codex/game-gdk-sdk-environment-probe-20261029
+      - codex/game-gdk-sdk-discovery-20261029
   workflow_dispatch:
 
 permissions:
@@ -19,16 +20,40 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $matches = @(Get-Command makepkg.exe -All -ErrorAction SilentlyContinue |
+          # PATH is not the only supported location for a Microsoft GDK install.
+          # Probe a bounded set of known roots; do not execute or install SDK.
+          $pathMatches = @(Get-Command makepkg.exe -All -ErrorAction SilentlyContinue |
             Where-Object { $_.CommandType -eq 'Application' })
-          $exe = $null
-          if ($matches.Count -gt 0) {
-            $exe = $matches[0].Source
+          $candidatePaths = @()
+          foreach ($match in $pathMatches) { $candidatePaths += $match.Source }
+          foreach ($rootVar in @('GameDK', 'GameDKCoreLatest')) {
+            $root = [Environment]::GetEnvironmentVariable($rootVar)
+            if ($root) { $candidatePaths += (Join-Path $root 'bin\makepkg.exe') }
           }
-          $sha = $null
-          if ($exe -and (Test-Path -LiteralPath $exe -PathType Leaf)) {
-            $sha = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          $binRoot = [Environment]::GetEnvironmentVariable('GDK_BIN')
+          if ($binRoot) { $candidatePaths += (Join-Path $binRoot 'makepkg.exe') }
+          $programFiles = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
+          if (-not $programFiles) { $programFiles = 'C:\Program Files (x86)' }
+          $candidatePaths += (Join-Path $programFiles 'Microsoft GDK\bin\makepkg.exe')
+          $seen = [System.Collections.Generic.HashSet[string]]::new(
+            [System.StringComparer]::OrdinalIgnoreCase)
+          $observed = @()
+          foreach ($candidate in $candidatePaths) {
+            if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
+            $resolved = [System.IO.Path]::GetFullPath($candidate)
+            if (-not $seen.Add($resolved)) { continue }
+            $item = Get-Item -LiteralPath $resolved -Force
+            $linked = [bool]($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)
+            $digest = if ($linked) { $null } else {
+              (Get-FileHash -LiteralPath $resolved -Algorithm SHA256).Hash.ToLowerInvariant()
+            }
+            $observed += [ordered]@{
+              path = $resolved
+              linked_untrusted = $linked
+              sha256_observed_unapproved = $digest
+            }
           }
+          $sha = if ($observed.Count -eq 1) { $observed[0].sha256_observed_unapproved } else { $null }
           $hints = @()
           foreach ($name in @('GameDK', 'GXDKLatest', 'GamingSDK', 'GDK')) {
             $value = [Environment]::GetEnvironmentVariable($name)
@@ -38,7 +63,7 @@ jobs:
               path_exists = [bool]($value -and (Test-Path -LiteralPath $value))
             }
           }
-          $status = if ($sha) { 'MAKEPKG_ON_PATH_UNAPPROVED' } else { 'MAKEPKG_NOT_ON_PATH' }
+          $status = if ($observed.Count -eq 0) { 'MAKEPKG_NOT_DISCOVERED' } elseif ($observed.Count -gt 1) { 'MAKEPKG_MULTIPLE_CANDIDATES_UNAPPROVED' } elseif (-not $sha) { 'MAKEPKG_LINKED_CANDIDATE_UNTRUSTED' } else { 'MAKEPKG_CANDIDATE_DISCOVERED_UNAPPROVED' }
           $result = [ordered]@{
             schema_version = 1
             status = $status
@@ -49,7 +74,8 @@ jobs:
             runner_os = $env:RUNNER_OS
             runner_image = $env:ImageOS
             runner_image_version = $env:ImageVersion
-            makepkg_on_path = [bool]$sha
+            makepkg_on_path = [bool]($pathMatches.Count -gt 0)
+            makepkg_candidates = $observed
             makepkg_sha256_observed_unapproved = $sha
             gdk_environment_hints = $hints
             makepkg_executed = $false
@@ -63,7 +89,7 @@ jobs:
             Set-Content -LiteralPath gdk-sdk-environment-probe.json -Encoding utf8
           Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value '## Signal Sprint — GDK SDK hosted runner probe'
           Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "Status: $status"
-          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value 'A detected hash is observational, NOT approved SDK provenance. No makepkg execution or package was produced.'
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value 'A discovered hash is observational, NOT approved SDK provenance. No makepkg execution or package was produced.'
       - name: Preserve machine-readable environment evidence
         uses: actions/upload-artifact@v4
         with:
