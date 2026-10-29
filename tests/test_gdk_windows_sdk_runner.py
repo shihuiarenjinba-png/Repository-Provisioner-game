@@ -191,6 +191,38 @@ class GdkWindowsSdkRunnerTests(unittest.TestCase):
     def test_sdk_executable_swap_during_intake_rejected(self):
         self._run_with_intake_mutation(mutate="sdk")
 
+    def test_stale_sdk_package_created_after_gate_rejected_before_execute(self):
+        # A concurrent/previous job may populate output after make_pack_plan
+        # checked it. The SDK must not run or claim those stale bytes.
+        def swap_output_before_execution():
+            (self.output / "SignalSprint.msixvc").write_bytes(b"stale package")
+            return self.fake_makepkg
+
+        a, b = self.patches()
+        with a, b, mock.patch("gdk_windows_sdk_runner._sdk_executable",
+                              side_effect=swap_output_before_execution), \
+             mock.patch("gdk_windows_sdk_runner.subprocess.run") as run:
+            with self.assertRaisesRegex(ConflictError, "empty immediately before execution"):
+                run_windows_pack(**{**self.args, "execute": True})
+            run.assert_not_called()
+        self.assertFalse(self.evidence.exists())
+        self.assertFalse(self.log.exists())
+
+    def test_stale_sdk_sidecar_created_after_gate_rejected_before_execute(self):
+        def swap_output_before_execution():
+            (self.output / "symbols.zip").write_bytes(b"stale sidecar")
+            return self.fake_makepkg
+
+        a, b = self.patches()
+        with a, b, mock.patch("gdk_windows_sdk_runner._sdk_executable",
+                              side_effect=swap_output_before_execution), \
+             mock.patch("gdk_windows_sdk_runner.subprocess.run") as run:
+            with self.assertRaisesRegex(ConflictError, "empty immediately before execution"):
+                run_windows_pack(**{**self.args, "execute": True})
+            run.assert_not_called()
+        self.assertFalse(self.evidence.exists())
+        self.assertFalse(self.log.exists())
+
     def test_reject_multiple_packages(self):
         (self.output / "first.msixvc").write_bytes(b"one")
         (self.output / "second.msixvc2").write_bytes(b"two")
