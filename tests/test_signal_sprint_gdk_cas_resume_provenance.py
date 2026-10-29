@@ -30,7 +30,7 @@ class GdkCasResumeProvenanceTests(unittest.TestCase):
         self.config = ProductConfig.load(ROOT / "config.json")
         self.job = Job.validate({
             "schema_version": "1.0", **PINNED_SIGNAL_SPRINT_JOB,
-            "display_name": "Signal Sprint",
+            "display_name": "Signal Sprint - Offline Route Puzzle",
             "target_owner": self.config.target_owner,
             "dry_run": False,
             "requested_actions": ["BUILD_WINDOWS", "INSPECT_PACKAGE",
@@ -85,7 +85,7 @@ class GdkCasResumeProvenanceTests(unittest.TestCase):
             if "/manifest.json" in endpoint:
                 return encoded({"slug": "signal-sprint", "kind": "game"})
             if "/proposals/" in endpoint:
-                return encoded({"slug": "signal-sprint", "title": "Signal Sprint"})
+                return encoded({"slug": "signal-sprint", "title": "Signal Sprint - Offline Route Puzzle"})
             if "/approved-identity.json" in endpoint:
                 self.assertIn("?ref=" + current_head, endpoint,
                               "GDK contents read must pin observed commit")
