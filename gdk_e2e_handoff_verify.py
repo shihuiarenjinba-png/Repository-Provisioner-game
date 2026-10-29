@@ -13,14 +13,15 @@ import re
 import sys
 
 from gdk_sdk_result_intake import (
-    MAX_LOG, MAX_PACKAGE, SHA256, SHA40, _hash_file, _read_json,
+    MAX_LOG, MAX_PACKAGE, MAX_SIDECAR, MAX_OUTPUT_FILES, SIDECAR_SUFFIXES,
+    SHA256, SHA40, _hash_file, _read_json,
 )
 from package_identity_provisioner import (
     ConflictError, HoldError, PINNED_SIGNAL_SPRINT_GDK_IDENTITY,
     PINNED_SIGNAL_SPRINT_JOB, VERSION,
 )
 
-FILES = frozenset({"package.msixvc2", "validation.log", "handoff.json"})
+BASE_FILES = frozenset({"package.msixvc2", "validation.log", "handoff.json"})
 MANIFEST_FIELDS = frozenset({
     "schema_version", "status", "type", "partner_center_selection",
     "package_format", "request_id", "source_repository", "source_branch",
@@ -33,6 +34,7 @@ MANIFEST_FIELDS = frozenset({
     "gdk_sdk_validation_independently_verified", "real_msix_pass",
     "e2e_pass", "store_submitted", "next_stage",
 })
+MANIFEST_FIELDS_V2 = MANIFEST_FIELDS | {"sdk_sidecars_sha256"}
 
 
 def _exact(manifest: dict, key: str, expected) -> None:
@@ -54,8 +56,6 @@ def verify_handoff(handoff_dir: Path, expected_manifest_sha256: str) -> dict:
         raise HoldError("GDK E2E handoff directory missing or linked")
     root = handoff_dir.resolve(strict=True)
     entries = list(root.iterdir())
-    if {p.name for p in entries} != FILES or len(entries) != len(FILES):
-        raise ConflictError("GDK E2E handoff must contain exactly three files")
     if any(p.is_symlink() or not p.is_file() for p in entries):
         raise ConflictError("GDK E2E handoff contains linked or non-regular files")
 
@@ -64,10 +64,30 @@ def verify_handoff(handoff_dir: Path, expected_manifest_sha256: str) -> dict:
     if manifest_sha != expected_manifest_sha256:
         raise ConflictError("GDK E2E trusted manifest SHA-256 mismatch")
     manifest = _read_json(manifest_path, "GDK handoff manifest")
-    if set(manifest) != MANIFEST_FIELDS:
+    schema = manifest.get("schema_version")
+    if schema == 1 and type(schema) is int and set(manifest) == MANIFEST_FIELDS:
+        sidecars = {}
+    elif schema == 2 and type(schema) is int and set(manifest) == MANIFEST_FIELDS_V2:
+        sidecars = manifest["sdk_sidecars_sha256"]
+        if type(sidecars) is not dict or len(sidecars) > MAX_OUTPUT_FILES - 1:
+            raise ConflictError("GDK E2E sidecar inventory invalid")
+        for name, digest in sidecars.items():
+            original = name.removeprefix("sdk-sidecar-")
+            if (not name.startswith("sdk-sidecar-") or not original
+                    or len(name) > 240 or original in (".", "..")
+                    or "/" in original or "\\" in original
+                    or any(ord(c) < 32 for c in original)
+                    or original.endswith((" ", "."))
+                    or Path(original).suffix.lower() not in SIDECAR_SUFFIXES
+                    or type(digest) is not str or not SHA256.fullmatch(digest)):
+                raise ConflictError("GDK E2E sidecar inventory invalid")
+    else:
         raise ConflictError("GDK E2E handoff schema unexpected")
+    expected_files = BASE_FILES | set(sidecars)
+    if {p.name for p in entries} != expected_files or len(entries) != len(expected_files):
+        raise ConflictError("GDK E2E handoff file inventory mismatch")
     expected = {
-        "schema_version": 1,
+        "schema_version": schema,
         "status": "GDK_E2E_QA_INTAKE_PENDING",
         "type": "game",
         "partner_center_selection": "GDK_GAME",
@@ -124,9 +144,13 @@ def verify_handoff(handoff_dir: Path, expected_manifest_sha256: str) -> dict:
         raise ConflictError("GDK E2E received package bytes mismatch")
     if log_sha != manifest["validation_log_sha256"]:
         raise ConflictError("GDK E2E received validation log bytes mismatch")
+    for name, digest in sidecars.items():
+        sidecar_sha, _ = _hash_file(root / name, MAX_SIDECAR, "GDK received SDK sidecar")
+        if sidecar_sha != digest:
+            raise ConflictError("GDK E2E received SDK sidecar bytes mismatch")
     if _hash_file(manifest_path, 1024 * 1024, "GDK handoff manifest")[0] != manifest_sha:
         raise ConflictError("GDK E2E manifest changed during verification")
-    if {p.name for p in root.iterdir()} != FILES:
+    if {p.name for p in root.iterdir()} != expected_files:
         raise ConflictError("GDK E2E handoff files changed during verification")
 
     return {
@@ -138,6 +162,8 @@ def verify_handoff(handoff_dir: Path, expected_manifest_sha256: str) -> dict:
         "package_sha256": package_sha,
         "package_size_bytes": package_size,
         "validation_log_sha256": log_sha,
+        "sdk_sidecars_sha256": dict(sorted(sidecars.items())),
+        "sdk_sidecar_count": len(sidecars),
         "manifest_sha256": manifest_sha,
         "independent_manifest_anchor_matched": True,
         "partner_center_selection": "GDK_GAME",
