@@ -72,6 +72,52 @@ class GdkE2eHandoffVerifyTests(unittest.TestCase):
         self.assertFalse(result["e2e_pass"])
         self.assertFalse(result["gdk_sdk_validation_independently_verified"])
 
+    def test_v2_sidecars_transfer_and_verification(self):
+        self.manifest["schema_version"] = 2
+        self.manifest["sdk_sidecars_sha256"] = {}
+        for name, data in (("sdk-sidecar-SignalSprint.ekb", b"synthetic EKB"),
+                           ("sdk-sidecar-symbols.zip", b"synthetic symbols")):
+            (self.root / name).write_bytes(data)
+            self.manifest["sdk_sidecars_sha256"][name] = sha(data)
+        receipt = self.check()
+        self.assertEqual(receipt["sdk_sidecar_count"], 2)
+        self.assertEqual(receipt["sdk_sidecars_sha256"], self.manifest["sdk_sidecars_sha256"])
+        self.assertFalse(receipt["real_msix_pass"])
+
+    def test_v2_sidecar_bytes_tampering_rejected(self):
+        self.manifest["schema_version"] = 2
+        name = "sdk-sidecar-SignalSprint.ekb"
+        (self.root / name).write_bytes(b"altered")
+        self.manifest["sdk_sidecars_sha256"] = {name: sha(b"original")}
+        with self.assertRaisesRegex(ConflictError, "sidecar bytes"):
+            self.check()
+
+    def test_v2_missing_sidecar_rejected(self):
+        self.manifest["schema_version"] = 2
+        self.manifest["sdk_sidecars_sha256"] = {
+            "sdk-sidecar-SignalSprint.ekb": sha(b"missing")}
+        with self.assertRaisesRegex(ConflictError, "inventory mismatch"):
+            self.check()
+
+    def test_v2_unreviewed_sidecar_extension_rejected(self):
+        self.manifest["schema_version"] = 2
+        self.manifest["sdk_sidecars_sha256"] = {
+            "sdk-sidecar-executable.exe": sha(b"bad")}
+        with self.assertRaisesRegex(ConflictError, "sidecar inventory invalid"):
+            self.check()
+
+    def test_v2_coordinated_sidecar_and_manifest_swap_rejected(self):
+        self.manifest["schema_version"] = 2
+        name = "sdk-sidecar-symbols.zip"
+        (self.root / name).write_bytes(b"original")
+        self.manifest["sdk_sidecars_sha256"] = {name: sha(b"original")}
+        self.manifest_path.write_text(json.dumps(self.manifest), encoding="utf-8")
+        anchor = sha(self.manifest_path.read_bytes())
+        (self.root / name).write_bytes(b"changed")
+        self.manifest["sdk_sidecars_sha256"][name] = sha(b"changed")
+        with self.assertRaisesRegex(ConflictError, "trusted manifest SHA-256 mismatch"):
+            self.check(anchor)
+
     def test_package_tampering_rejected(self):
         self.package.write_bytes(b"modified synthetic package")
         with self.assertRaisesRegex(ConflictError, "package bytes"):
@@ -99,7 +145,7 @@ class GdkE2eHandoffVerifyTests(unittest.TestCase):
 
     def test_extra_file_rejected(self):
         (self.root / "unexpected.txt").write_text("unexpected")
-        with self.assertRaisesRegex(ConflictError, "exactly three"):
+        with self.assertRaisesRegex(ConflictError, "inventory mismatch"):
             self.check()
 
     def test_duplicate_json_key_rejected(self):
