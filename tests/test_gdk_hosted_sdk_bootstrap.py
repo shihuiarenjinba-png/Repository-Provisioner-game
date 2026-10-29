@@ -17,6 +17,8 @@ class HostedBootstrapTests(unittest.TestCase):
             result = bootstrap._probe_versions(Path("C:/approved/winget.exe"))
         self.assertEqual(result["catalog_query_status"], "CANDIDATES_FOUND")
         self.assertEqual(result["unapproved_version_candidates"],
+                         ["2604.0.7500", "2610.0.8000", "2610.1.8100"])
+        self.assertEqual(result["unapproved_2610_candidates"],
                          ["2610.0.8000", "2610.1.8100"])
         command = run.call_args.args[0]
         self.assertEqual(command[1], "show")
