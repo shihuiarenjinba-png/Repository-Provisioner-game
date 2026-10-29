@@ -15,6 +15,16 @@ References:
 
 `.github/workflows/signal-sprint-gdk-hosted-bootstrap.yml` on its development branch performs **probe-only** on push. It checks for WinGet and, when available, performs a **read-only** `winget show --id Microsoft.Gaming.GDK --exact --versions --source winget` catalog query. It does not install or execute any GDK tool. The artifact is `signal-sprint-gdk-hosted-sdk-bootstrap`. The JSON fields `catalog_query_status` and `unapproved_version_candidates` distinguish an unavailable catalog from candidate version strings. **Catalog versions are unapproved hints, not a version pin, an SDK installation, or a trusted makepkg.exe digest.** The probe reports both April 2026 (`2604.x`) and October 2026 (`2610.x`) candidates, with a separate `unapproved_2610_candidates` field. This is discovery only: the installation gate still requires an independently approved `2610.x` pin and SHA-256. The first live read-only probe on October 30 (Actions run `40928168484`) returned `NO_2610_CANDIDATES`; this does **not** prove the public catalog has no supported earlier SDK. Query failure must not be treated as evidence that the SDK is unavailable.
 
+## Preview vs retail SDK catalog decision (October 30, 2026)
+
+Microsoft's current MSIXVC2 packaging documentation distinguishes **April 2026 GDK 2604 preview**, which uses `makepkg2.exe` and cannot be treated as retail certification-ready, from **October 2026 GDK 2610 general availability**, which uses managed `makepkg.exe`. This bootstrap intentionally accepts **only an independently approved 2610.x** SDK for its retail-oriented install gate; do not substitute 2604.x simply because WinGet lists it.
+
+Read-only probe JSON now exposes `unapproved_2604_candidates`, `unapproved_2610_candidates`, `preview_2604_catalog_status`, `retail_2610_catalog_status`, and `retail_msixvc2_sdk_approved=false`. A successful query with only 2604 versions means `retail_2610_catalog_status=NOT_LISTED`; a failed or unavailable query means `UNKNOWN`, **not** proof of absence. Even if 2610 appears, `CANDIDATE_UNAPPROVED` is not permission to install, build, or submit. The independent SDK executable digest and explicit install authorization remain mandatory.
+
+Authoritative references:
+- https://learn.microsoft.com/en-us/gaming/gdk/docs/features/common/packaging/overviews/packaging-getting-started-for-pc-msixvc2
+- https://learn.microsoft.com/en-us/gaming/gdk/docs/features/common/packaging/overviews/packaging-msixvc2-overview
+
 A later **manual** workflow_dispatch on a branch containing this workflow (GitHub generally requires a workflow on the default branch for manual dispatch) may set:
 - `install_sdk=true`
 - `sdk_version` = an independently reviewed exact **2610.x** GDK package version
