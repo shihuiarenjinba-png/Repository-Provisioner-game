@@ -20,6 +20,9 @@ from gdk_windows_filename import validate_windows_basename, validate_unique_wind
 
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 SHA40 = re.compile(r"[0-9a-f]{40}\Z")
+# SDK version is a self-reported exact retail 2610.x pin, not certification.
+# Preview 2604.x must never enter the retail MSIXVC2 byte handoff.
+RETAIL_SDK_VERSION = re.compile(r"2610(?:\.[0-9]+){1,3}\Z")
 MAX_JSON = 1024 * 1024
 MAX_LOG = 100 * 1024 * 1024
 MAX_PACKAGE = 20 * 1024 * 1024 * 1024
@@ -151,8 +154,8 @@ def intake(plan_path: Path, evidence_path: Path, package_dir: Path,
         raise ConflictError("GDK SDK argv unsafe")
     _expect(result, "sdk_command_argv", argv)
     version = result["sdk_version"]
-    if type(version) is not str or not 5 <= len(version) <= 160 or any(c in version for c in "\r\n\x00"):
-        raise ConflictError("GDK SDK version missing")
+    if type(version) is not str or not RETAIL_SDK_VERSION.fullmatch(version):
+        raise ConflictError("GDK retail 2610.x SDK version pin required (self-reported, not certified)")
     filename = result["package_filename"]
     if type(filename) is not str or filename in ("", ".", "..") or Path(filename).name != filename or "/" in filename or "\\" in filename or not filename.lower().endswith((".msixvc", ".msixvc2")):
         raise ConflictError("GDK package filename invalid")

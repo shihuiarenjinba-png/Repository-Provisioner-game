@@ -56,7 +56,7 @@ class GdkWindowsSdkRunnerTests(unittest.TestCase):
             preflight_receipt=self.root / "preflight.json",
             output_dir=self.output, sdk_handoff=self.anchor,
             trusted_handoff_sha256=sha(self.anchor.read_bytes()),
-            pack_plan=self.plan_path, sdk_version_claim="GDK October 2026",
+            pack_plan=self.plan_path, sdk_version_claim="2610.0.8000",
             validation_log=self.log, result_evidence=self.evidence,
             trusted_makepkg_sha256=sha(self.fake_makepkg.read_bytes()),
         )
@@ -234,6 +234,20 @@ class GdkWindowsSdkRunnerTests(unittest.TestCase):
         (self.output / "rogue.exe").write_bytes(b"two")
         with self.assertRaisesRegex(ConflictError, "unreviewed sidecar"):
             _scan_sdk_output(self.output)
+
+    def test_preview_sdk_version_rejected_before_sdk_execution(self):
+        a, b = self.patches()
+        with a, b, mock.patch("gdk_windows_sdk_runner.subprocess.run") as run:
+            with self.assertRaisesRegex(HoldError, "2610"):
+                run_windows_pack(**{**self.args, "sdk_version_claim": "2604.5.7903", "execute": True})
+            run.assert_not_called()
+        self.assertFalse(self.log.exists())
+        self.assertFalse(self.evidence.exists())
+
+    def test_human_label_cannot_replace_exact_sdk_pin(self):
+        with self.assertRaisesRegex(HoldError, "2610"):
+            _make_evidence(self.plan, "October 2026 GDK", "SignalSprint.msixvc",
+                           {"SignalSprint.msixvc": "a" * 64}, 1, "b" * 64)
 
     def test_reject_invalid_sdk_version_claim(self):
         with self.assertRaises(HoldError):

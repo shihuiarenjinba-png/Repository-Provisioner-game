@@ -40,7 +40,7 @@ class GdkTrustedE2eExportTests(unittest.TestCase):
             "package_sha256": "d" * 64,
             "validation_log_sha256": digest(self.log),
             "package_size_bytes": 123,
-            "sdk_version_claim": "GDK SDK 2026",
+            "sdk_version_claim": "2610.0.8000",
             "sdk_exit_code_claim": 0,
         }
         self.trusted = {

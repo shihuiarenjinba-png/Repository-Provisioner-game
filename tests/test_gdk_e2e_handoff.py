@@ -67,7 +67,7 @@ class GdkE2eHandoffTests(unittest.TestCase):
             "status": "GDK_SDK_PACK_EXECUTED",
             "sdk_command_argv": argv,
             "sdk_executable": "makepkg.exe",
-            "sdk_version": "October 2026 GDK SDK",
+            "sdk_version": "2610.0.8000",
             "sdk_exit_code": 0,
             "validation_log_sha256": sha(self.log.read_bytes()),
             "package_filename": self.package.name,

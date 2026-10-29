@@ -49,7 +49,7 @@ class GdkE2eHandoffVerifyTests(unittest.TestCase):
             "validation_log_sha256": sha(self.log.read_bytes()),
             "sdk_result_evidence_sha256": "d" * 64,
             "sdk_pack_plan_sha256": "e" * 64,
-            "sdk_version_claim": "October 2026 GDK SDK",
+            "sdk_version_claim": "2610.0.8000",
             "sdk_exit_code_claim": 0,
             "gdk_sdk_validation_independently_verified": False,
             "real_msix_pass": False,
