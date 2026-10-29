@@ -177,6 +177,13 @@ def run_windows_pack(*, factory_checkout: Path, artifact_zip: Path, cas_sha: str
     executable = _sdk_executable()
     if _hash_file(executable, 512 * 1024 * 1024, "GDK makepkg.exe")[0] != trusted_makepkg_sha256:
         raise ConflictError("GDK makepkg.exe differs from independently approved bytes")
+    # make_pack_plan verified an empty output earlier, but the directory can
+    # change while the independent gates and SDK executable are being checked.
+    # Never accept a stale package from a prior run as the new SDK result.
+    if output_dir.is_symlink() or not output_dir.is_dir():
+        raise ConflictError("GDK SDK output directory missing or linked before execution")
+    if any(output_dir.iterdir()):
+        raise ConflictError("GDK SDK output must be empty immediately before execution")
     command = [str(executable), *plan["sdk_command_argv_not_executed"][1:]]
     try:
         with validation_log.open("xb") as log:
