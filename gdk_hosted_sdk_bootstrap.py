@@ -21,7 +21,7 @@ from package_identity_provisioner import ConflictError, HoldError, PINNED_SIGNAL
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 OCTOBER_GDK = re.compile(r"2610(?:\.\d+){1,3}\Z")
 MAX_EXE = 512 * 1024 * 1024
-VERSION_TOKEN = re.compile(r"(?<![A-Za-z0-9.])2610(?:\.\d+){1,3}(?![A-Za-z0-9.])")
+VERSION_TOKEN = re.compile(r"(?<![A-Za-z0-9.])(?:2604|2610)(?:\.\d+){1,3}(?![A-Za-z0-9.])")
 
 
 def _winget() -> Path | None:
@@ -83,13 +83,14 @@ def _probe_versions(winget: Path) -> dict:
                                    errors="replace")
     except (OSError, subprocess.TimeoutExpired):
         return {"catalog_query_status": "UNAVAILABLE",
-                "unapproved_version_candidates": []}
+                "unapproved_version_candidates": [], "unapproved_2610_candidates": []}
     if completed.returncode != 0:
         return {"catalog_query_status": "FAILED",
-                "unapproved_version_candidates": []}
+                "unapproved_version_candidates": [], "unapproved_2610_candidates": []}
     candidates = sorted(set(VERSION_TOKEN.findall(completed.stdout or "")))
-    return {"catalog_query_status": "CANDIDATES_FOUND" if candidates else "NO_2610_CANDIDATES",
-            "unapproved_version_candidates": candidates[:50]}
+    return {"catalog_query_status": "CANDIDATES_FOUND" if candidates else "NO_2604_OR_2610_CANDIDATES",
+            "unapproved_version_candidates": candidates[:50],
+            "unapproved_2610_candidates": [v for v in candidates if v.startswith("2610.")][:50]}
 
 
 def bootstrap(*, install: bool = False, probe_versions: bool = False, sdk_version: str = "",
@@ -116,7 +117,7 @@ def bootstrap(*, install: bool = False, probe_versions: bool = False, sdk_versio
         catalog = (_probe_versions(winget) if probe_versions and winget is not None
                    else {"catalog_query_status": "NOT_QUERIED" if not probe_versions
                          else "WINGET_UNAVAILABLE",
-                         "unapproved_version_candidates": []})
+                         "unapproved_version_candidates": [], "unapproved_2610_candidates": []})
         return {**base, "status": "GDK_HOSTED_WINGET_PROBE_ONLY",
                 "winget_available": winget is not None, **catalog}
     # This is never a local-PC installer. Do not install anything on a
