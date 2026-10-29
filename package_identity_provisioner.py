@@ -739,13 +739,20 @@ class GitHubReturnClient:
         if not isinstance(head_sha, str) or not SHA40.fullmatch(head_sha):
             raise RetryableError("Factory HEAD could not be verified before identity return")
         self._verify_product(base, job, config)
-        existing = self.api(base + "contents/" + target_path + "?ref=" + quote(job.source_branch, safe=""), allow_missing=True)
+        # Bind the GDK retry read to the observed commit, not a moving branch
+        # ref. A later branch update must never turn a matching Identity blob
+        # into an apparently successful CAS resume.
+        gdk_return = official.get("identity_source") == GDK_USER_IDENTITY_SOURCE
+        evidence_ref = head_sha if gdk_return else job.source_branch
+        existing = self.api(base + "contents/" + target_path + "?ref=" + quote(evidence_ref, safe=""), allow_missing=True)
         if existing is not None:
             if self._existing_matches(existing, official, job, package):
-                # A successful atomic return advances the source branch.  A
-                # retry after an ambiguous API response must therefore inspect
-                # the existing immutable payload before comparing HEAD with the
-                # original source SHA.  This is read-only and never overwrites.
+                # A successful atomic return advances the source branch. The
+                # GDK source branch must contain exactly ONE CAS commit from
+                # the immutable source, adding only approved-identity.json.
+                # A matching file alone is insufficient provenance.
+                if gdk_return:
+                    self._verify_existing_gdk_cas(base, job, head_sha, target_path)
                 return {**proposal, "status": "EXISTING_VERIFIED", "commit_sha": head_sha}
             raise ConflictError("approved-identity.json already exists and will not be overwritten")
         if head_sha != job.source_sha:
@@ -790,6 +797,35 @@ class GitHubReturnClient:
         if not isinstance(commit, dict) or not SHA40.fullmatch(str(commit.get("oid", ""))):
             raise RetryableError("GitHub returned no confirmed commit SHA; reconcile before retry")
         return {**proposal, "status": "APPLIED", "commit_sha": commit["oid"], "commit_url": commit.get("url")}
+
+    def _verify_existing_gdk_cas(self, base: str, job: Job,
+                                 head_sha: str, target_path: str) -> None:
+        """Only the original single-file CAS commit may be resumed as verified.
+
+        The post-CAS build belongs on a separate branch. Never bless an
+        arbitrary descendant of the pinned source just because it still
+        contains matching approved Identity bytes.
+        """
+        if head_sha == job.source_sha:
+            raise ConflictError("GDK approved Identity cannot predate CAS")
+        commit = self.api(base + "commits/" + head_sha)
+        if not isinstance(commit, dict) or commit.get("sha") != head_sha:
+            raise ConflictError("GDK CAS commit provenance unavailable")
+        parents = commit.get("parents")
+        if (not isinstance(parents, list) or len(parents) != 1
+                or not isinstance(parents[0], dict)
+                or parents[0].get("sha") != job.source_sha):
+            raise ConflictError("GDK CAS must directly descend from immutable source SHA")
+        files = commit.get("files")
+        if (not isinstance(files, list) or len(files) != 1
+                or not isinstance(files[0], dict)
+                or files[0].get("filename") != target_path
+                or files[0].get("status") != "added"):
+            raise ConflictError("GDK CAS commit must add only approved Identity")
+        latest = self.api(base + "git/ref/heads/" + job.source_branch)
+        if (not isinstance(latest, dict)
+                or latest.get("object", {}).get("sha") != head_sha):
+            raise ConflictError("GDK source branch moved during CAS resume verification")
 
     def _verify_product(self, base: str, job: Job, config: ProductConfig) -> None:
         branch = quote(job.source_branch, safe="")
