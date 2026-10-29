@@ -16,6 +16,7 @@ import stat
 import sys
 
 from package_identity_provisioner import ConflictError, HoldError, PINNED_SIGNAL_SPRINT_JOB
+from gdk_windows_filename import validate_windows_basename, validate_unique_windows_names
 
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 SHA40 = re.compile(r"[0-9a-f]{40}\Z")
@@ -155,6 +156,7 @@ def intake(plan_path: Path, evidence_path: Path, package_dir: Path,
     filename = result["package_filename"]
     if type(filename) is not str or filename in ("", ".", "..") or Path(filename).name != filename or "/" in filename or "\\" in filename or not filename.lower().endswith((".msixvc", ".msixvc2")):
         raise ConflictError("GDK package filename invalid")
+    validate_windows_basename(filename, "GDK package")
     for key in ("package_sha256", "validation_log_sha256"):
         if type(result[key]) is not str or not SHA256.fullmatch(result[key]):
             raise ConflictError("GDK invalid " + key)
@@ -174,14 +176,12 @@ def intake(plan_path: Path, evidence_path: Path, package_dir: Path,
     if (type(inventory) is not dict or not 1 <= len(inventory) <= MAX_OUTPUT_FILES
             or set(inventory) != {entry.name for entry in files}):
         raise ConflictError("GDK output inventory incomplete or unexpected")
+    validate_unique_windows_names(inventory, "GDK output")
     if inventory.get(filename) != result["package_sha256"]:
         raise ConflictError("GDK package missing from output inventory")
     for entry in files:
         name = entry.name
-        if (not name or name in (".", "..") or len(name) > 240
-                or "/" in name or "\\" in name or any(ord(c) < 32 for c in name)
-                or name.endswith((" ", "."))):
-            raise ConflictError("GDK output filename unsafe")
+        validate_windows_basename(name, "GDK output")
         if entry.is_symlink() or not entry.is_file():
             raise ConflictError("GDK output contains linked or non-file evidence")
         digest = inventory[name]

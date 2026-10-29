@@ -114,6 +114,11 @@ class GdkSdkResultIntakeTests(unittest.TestCase):
         with self.assertRaisesRegex(ConflictError, "filename"):
             self.check()
 
+    def test_reserved_windows_package_name_rejected(self):
+        self.evidence["package_filename"] = "CON.msixvc2"
+        with self.assertRaisesRegex(ConflictError, "unsafe Windows filename"):
+            self.check()
+
     def test_extra_output_rejected(self):
         (self.output / "extra.msixvc2").write_bytes(b"bad")
         with self.assertRaisesRegex(ConflictError, "inventory"):

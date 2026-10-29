@@ -20,6 +20,7 @@ from package_identity_provisioner import (
     ConflictError, HoldError, PINNED_SIGNAL_SPRINT_GDK_IDENTITY,
     PINNED_SIGNAL_SPRINT_JOB, VERSION,
 )
+from gdk_windows_filename import validate_windows_basename, validate_unique_windows_names
 
 BASE_FILES = frozenset({"package.msixvc2", "validation.log", "handoff.json"})
 MANIFEST_FIELDS = frozenset({
@@ -58,6 +59,7 @@ def verify_handoff(handoff_dir: Path, expected_manifest_sha256: str) -> dict:
     entries = list(root.iterdir())
     if any(p.is_symlink() or not p.is_file() for p in entries):
         raise ConflictError("GDK E2E handoff contains linked or non-regular files")
+    validate_unique_windows_names((p.name for p in entries), "GDK E2E received files")
 
     manifest_path = root / "handoff.json"
     manifest_sha, _ = _hash_file(manifest_path, 1024 * 1024, "GDK handoff manifest")
@@ -81,6 +83,10 @@ def verify_handoff(handoff_dir: Path, expected_manifest_sha256: str) -> dict:
                     or Path(original).suffix.lower() not in SIDECAR_SUFFIXES
                     or type(digest) is not str or not SHA256.fullmatch(digest)):
                 raise ConflictError("GDK E2E sidecar inventory invalid")
+            validate_windows_basename(original, "GDK E2E sidecar")
+        validate_unique_windows_names(sidecars, "GDK E2E sidecar inventory")
+        validate_unique_windows_names((n.removeprefix("sdk-sidecar-") for n in sidecars),
+                                      "GDK E2E original sidecar inventory")
     else:
         raise ConflictError("GDK E2E handoff schema unexpected")
     expected_files = BASE_FILES | set(sidecars)
@@ -125,6 +131,7 @@ def verify_handoff(handoff_dir: Path, expected_manifest_sha256: str) -> dict:
             "/" in original_name or "\\" in original_name or
             not original_name.lower().endswith((".msixvc", ".msixvc2"))):
         raise ConflictError("GDK E2E original SDK filename invalid")
+    validate_windows_basename(original_name, "GDK E2E original SDK filename")
     for key in ("package_sha256", "validation_log_sha256",
                 "sdk_result_evidence_sha256", "sdk_pack_plan_sha256"):
         value = manifest[key]
