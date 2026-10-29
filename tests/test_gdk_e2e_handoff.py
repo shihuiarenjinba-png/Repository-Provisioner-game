@@ -85,6 +85,8 @@ class GdkE2eHandoffTests(unittest.TestCase):
         manifest = self.export()
         self.assertEqual(manifest["source_sha"], PINNED_SIGNAL_SPRINT_JOB["source_sha"])
         self.assertEqual(manifest["type"], "game")
+        self.assertEqual(manifest["schema_version"], 2)
+        self.assertEqual(manifest["sdk_sidecars_sha256"], {})
         self.assertEqual(manifest["partner_center_selection"], "GDK_GAME")
         self.assertEqual(manifest["package_format"], "MSIXVC2")
         self.assertFalse(manifest["real_msix_pass"])
@@ -97,6 +99,45 @@ class GdkE2eHandoffTests(unittest.TestCase):
         self.assertEqual(json.loads((self.target / "handoff.json").read_text()), manifest)
         self.assertEqual({p.name for p in self.target.iterdir()},
                          {"package.msixvc2", "validation.log", "handoff.json"})
+
+    def test_sdk_sidecars_preserved_with_hashes(self):
+        for name, data in (("SignalSprint.ekb", b"synthetic EKB"),
+                           ("SubmissionValidator.xml", b"<synthetic/>"),
+                           ("symbols.zip", b"synthetic symbols")):
+            (self.package_dir / name).write_bytes(data)
+            self.evidence["output_files_sha256"][name] = sha(data)
+        manifest = self.export()
+        self.assertEqual(len(manifest["sdk_sidecars_sha256"]), 3)
+        for original in ("SignalSprint.ekb", "SubmissionValidator.xml", "symbols.zip"):
+            transfer = "sdk-sidecar-" + original
+            self.assertEqual((self.target / transfer).read_bytes(),
+                             (self.package_dir / original).read_bytes())
+            self.assertEqual(manifest["sdk_sidecars_sha256"][transfer],
+                             sha((self.package_dir / original).read_bytes()))
+        self.assertFalse(manifest["real_msix_pass"])
+
+    def test_sidecar_tamper_rejected_without_partial_handoff(self):
+        extra = self.package_dir / "SignalSprint.ekb"
+        extra.write_bytes(b"original")
+        self.evidence["output_files_sha256"][extra.name] = sha(b"original")
+        extra.write_bytes(b"tampered")
+        with self.assertRaisesRegex(ConflictError, "sidecar bytes"):
+            self.export()
+        self.assertFalse(self.target.exists())
+
+    def test_sidecar_mutation_during_copy_cleans_destination(self):
+        extra = self.package_dir / "SignalSprint.ekb"
+        extra.write_bytes(b"original")
+        self.evidence["output_files_sha256"][extra.name] = sha(extra.read_bytes())
+        original = export_handoff.__globals__["_copy_verified"]
+        def fail_sidecar(source, target, *args):
+            if source.name == "SignalSprint.ekb":
+                raise ConflictError("simulated sidecar copy failure")
+            return original(source, target, *args)
+        with mock.patch("gdk_e2e_handoff._copy_verified", side_effect=fail_sidecar):
+            with self.assertRaisesRegex(ConflictError, "sidecar copy failure"):
+                self.export()
+        self.assertFalse(self.target.exists())
 
     def test_existing_handoff_never_overwritten(self):
         self.target.mkdir()
