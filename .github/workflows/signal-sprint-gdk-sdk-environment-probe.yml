@@ -1,0 +1,73 @@
+name: Signal Sprint GDK SDK environment probe
+
+# Read-only hosted-runner capability check. No game build, CAS, or Store calls.
+on:
+  push:
+    branches:
+      - codex/game-gdk-sdk-environment-probe-20261029
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe-windows-gdk:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Detect makepkg.exe without executing it
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $matches = @(Get-Command makepkg.exe -All -ErrorAction SilentlyContinue |
+            Where-Object { $_.CommandType -eq 'Application' })
+          $exe = $null
+          if ($matches.Count -gt 0) {
+            $exe = $matches[0].Source
+          }
+          $sha = $null
+          if ($exe -and (Test-Path -LiteralPath $exe -PathType Leaf)) {
+            $sha = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          }
+          $hints = @()
+          foreach ($name in @('GameDK', 'GXDKLatest', 'GamingSDK', 'GDK')) {
+            $value = [Environment]::GetEnvironmentVariable($name)
+            $hints += [ordered]@{
+              variable = $name
+              set = [bool]$value
+              path_exists = [bool]($value -and (Test-Path -LiteralPath $value))
+            }
+          }
+          $status = if ($sha) { 'MAKEPKG_ON_PATH_UNAPPROVED' } else { 'MAKEPKG_NOT_ON_PATH' }
+          $result = [ordered]@{
+            schema_version = 1
+            status = $status
+            product = 'Signal Sprint'
+            partner_center_selection = 'GDK_GAME'
+            request_id = 'game-signal-sprint-c058cbf7fe38e02d929c67d047d717ff74bd522e'
+            immutable_source_sha = 'c058cbf7fe38e02d929c67d047d717ff74bd522e'
+            runner_os = $env:RUNNER_OS
+            runner_image = $env:ImageOS
+            runner_image_version = $env:ImageVersion
+            makepkg_on_path = [bool]$sha
+            makepkg_sha256_observed_unapproved = $sha
+            gdk_environment_hints = $hints
+            makepkg_executed = $false
+            sdk_version_verified = $false
+            cas_return_pass = $false
+            real_msix_pass = $false
+            e2e_pass = $false
+            store_submitted = $false
+          }
+          $result | ConvertTo-Json -Depth 6 |
+            Set-Content -LiteralPath gdk-sdk-environment-probe.json -Encoding utf8
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value '## Signal Sprint — GDK SDK hosted runner probe'
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "Status: $status"
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value 'A detected hash is observational, NOT approved SDK provenance. No makepkg execution or package was produced.'
+      - name: Preserve machine-readable environment evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-gdk-sdk-environment-probe
+          path: gdk-sdk-environment-probe.json
+          if-no-files-found: error
+          retention-days: 7
