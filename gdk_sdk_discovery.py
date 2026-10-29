@@ -19,6 +19,13 @@ def _candidates() -> list[Path]:
     on_path = shutil.which("makepkg.exe")
     if on_path:
         paths.append(Path(on_path))
+    # shutil.which returns only the FIRST PATH hit. A second installed SDK
+    # must not be silently ignored: enumerate bounded, explicit PATH entries.
+    # Empty/relative entries are deliberately ignored (no current-dir lookup).
+    for entry in os.environ.get("PATH", "").split(";"):
+        directory = Path(entry.strip().strip('"'))
+        if entry.strip() and directory.is_absolute():
+            paths.append(directory / "makepkg.exe")
     for name in ("GameDK", "GameDKCoreLatest"):
         root = os.environ.get(name)
         if root:
@@ -35,8 +42,13 @@ def _regular_executable(path: Path) -> Path | None:
     # Missing candidates are normal; linked or special files are not.
     if not path.exists() and not path.is_symlink():
         return None
-    if path.is_symlink() or not stat.S_ISREG(path.lstat().st_mode):
-        raise ConflictError("GDK makepkg candidate linked or not a regular file")
+    # Windows junctions/reparse-point parents are not an approved SDK root.
+    # Check the whole path, not only makepkg.exe itself, before resolving it.
+    for component in (path, *path.parents):
+        if component.is_symlink() or getattr(component, "is_junction", lambda: False)():
+            raise ConflictError("GDK makepkg candidate linked parent or executable")
+    if not stat.S_ISREG(path.lstat().st_mode):
+        raise ConflictError("GDK makepkg candidate is not a regular file")
     try:
         return path.resolve(strict=True)
     except (OSError, RuntimeError) as exc:
