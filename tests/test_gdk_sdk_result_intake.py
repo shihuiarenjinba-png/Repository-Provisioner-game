@@ -53,7 +53,7 @@ class GdkSdkResultIntakeTests(unittest.TestCase):
             "verified_receipt_sha256", "staging_files_sha256", "store_submitted")}
         self.evidence.update({
             "status": "GDK_SDK_PACK_EXECUTED", "sdk_command_argv": argv,
-            "sdk_executable": "makepkg.exe", "sdk_version": "October 2026 GDK SDK",
+            "sdk_executable": "makepkg.exe", "sdk_version": "2610.0.8000",
             "sdk_exit_code": 0,
             "validation_log_sha256": sha(self.log_path.read_bytes()),
             "package_filename": self.package.name,
@@ -73,6 +73,16 @@ class GdkSdkResultIntakeTests(unittest.TestCase):
         self.assertFalse(result["real_msix_pass"])
         self.assertFalse(result["e2e_pass"])
         self.assertFalse(result["gdk_sdk_validation_independently_verified"])
+
+    def test_preview_sdk_claim_rejected_before_retail_handoff(self):
+        self.evidence["sdk_version"] = "2604.5.7903"
+        with self.assertRaisesRegex(ConflictError, "2610"):
+            self.check()
+
+    def test_unpinned_human_sdk_label_rejected(self):
+        self.evidence["sdk_version"] = "October 2026 GDK SDK"
+        with self.assertRaisesRegex(ConflictError, "2610"):
+            self.check()
 
     def test_changed_package_rejected(self):
         self.package.write_bytes(b"tampered")

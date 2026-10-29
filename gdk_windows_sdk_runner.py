@@ -19,7 +19,7 @@ from gdk_sdk_discovery import discover_makepkg
 from gdk_sdk_handoff_gate import create_sdk_handoff
 from gdk_sdk_result_intake import (
     MAX_JSON, MAX_LOG, MAX_OUTPUT_FILES, MAX_PACKAGE, MAX_SIDECAR,
-    RESULT_FIELDS, SHA256, SIDECAR_SUFFIXES, _hash_file, _read_json, intake,
+    RESULT_FIELDS, SHA256, RETAIL_SDK_VERSION, SIDECAR_SUFFIXES, _hash_file, _read_json, intake,
 )
 from gdk_windows_filename import validate_unique_windows_names
 from gdk_msixvc2_recheck import recheck
@@ -70,9 +70,8 @@ def _scan_sdk_output(output: Path) -> tuple[str, dict[str, str], int]:
 
 def _make_evidence(plan: dict, sdk_version_claim: str, filename: str,
                    inventory: dict[str, str], size: int, log_sha: str) -> dict:
-    if (type(sdk_version_claim) is not str or not 5 <= len(sdk_version_claim) <= 160
-            or any(c in sdk_version_claim for c in "\r\n\x00")):
-        raise HoldError("reviewed GDK SDK version claim required")
+    if type(sdk_version_claim) is not str or not RETAIL_SDK_VERSION.fullmatch(sdk_version_claim):
+        raise HoldError("reviewed exact retail GDK 2610.x SDK version pin required")
     evidence = {
         "schema_version": 1,
         "status": "GDK_SDK_PACK_EXECUTED",
@@ -118,9 +117,8 @@ def run_windows_pack(*, factory_checkout: Path, artifact_zip: Path, cas_sha: str
         raise HoldError("independent GDK SDK handoff SHA-256 required")
     if not 1 <= timeout_seconds <= 7200:
         raise ConflictError("GDK SDK timeout outside reviewed bounds")
-    if (type(sdk_version_claim) is not str or not 5 <= len(sdk_version_claim) <= 160
-            or any(c in sdk_version_claim for c in "\r\n\x00")):
-        raise HoldError("reviewed GDK SDK version claim required")
+    if type(sdk_version_claim) is not str or not RETAIL_SDK_VERSION.fullmatch(sdk_version_claim):
+        raise HoldError("reviewed exact retail GDK 2610.x SDK version pin required")
     if _hash_file(sdk_handoff, MAX_JSON, "GDK SDK trusted handoff")[0] != trusted_handoff_sha256:
         raise ConflictError("GDK SDK independent handoff SHA mismatch")
     handoff = _read_json(sdk_handoff, "GDK SDK trusted handoff")

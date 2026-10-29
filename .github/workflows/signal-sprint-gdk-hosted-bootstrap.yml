@@ -1,0 +1,62 @@
+name: Signal Sprint hosted GDK SDK bootstrap (opt-in)
+
+# Push is probe-only. Installing the SDK requires an explicit manual dispatch
+# with a version pin and independently approved makepkg.exe SHA-256.
+on:
+  push:
+    branches:
+      - codex/game-gdk-hosted-bootstrap-20261030
+  workflow_dispatch:
+    inputs:
+      install_sdk:
+        description: 'Explicitly install GDK on ephemeral hosted Windows (never on push)'
+        required: true
+        type: boolean
+        default: false
+      sdk_version:
+        description: 'Exact approved October 2026 GDK 2610.x version (required for install)'
+        required: false
+        type: string
+      approved_makepkg_sha256:
+        description: 'Independently reviewed 64-character makepkg.exe SHA-256'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  hosted-sdk-bootstrap:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Probe hosted WinGet or explicitly install pinned GDK (no makepkg execution)
+        shell: pwsh
+        env:
+          INSTALL_REQUESTED: ${{ inputs.install_sdk }}
+          GDK_VERSION_PIN: ${{ inputs.sdk_version }}
+          APPROVED_MAKEPKG_SHA256: ${{ inputs.approved_makepkg_sha256 }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Read-only catalog query on push; versions are candidates, never approvals.
+          $arguments = @('--probe-versions')
+          if ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch' -and $env:INSTALL_REQUESTED -eq 'true') {
+            $arguments = @('--install', '--sdk-version', $env:GDK_VERSION_PIN,
+                           '--approved-makepkg-sha256', $env:APPROVED_MAKEPKG_SHA256)
+          }
+          python gdk_hosted_sdk_bootstrap.py @arguments |
+            Tee-Object -FilePath gdk-hosted-sdk-bootstrap.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value 'Signal Sprint GDK hosted bootstrap: see JSON artifact. Version candidates are unapproved; no CAS, makepkg, Store or install/GUI QA.'
+      - name: Preserve read-only or approved-install evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-gdk-hosted-sdk-bootstrap
+          path: gdk-hosted-sdk-bootstrap.json
+          if-no-files-found: warn
+          retention-days: 7

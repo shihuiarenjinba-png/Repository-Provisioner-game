@@ -34,7 +34,7 @@ The result JSON requires **exactly** these fields:
 | verified_receipt_sha256, staging_files_sha256 | Exact hashes from plan |
 | sdk_command_argv | Exact nine-element command from plan |
 | sdk_executable | makepkg.exe |
-| sdk_version | Version observed by Windows builder |
+| sdk_version | Exact numeric retail `2610.x` version claimed by Windows builder; `2604.x` preview and human labels are rejected, but this is not independent SDK attestation |
 | sdk_exit_code | 0 (builder claim; not independently trusted) |
 | validation_log_sha256 | SHA-256 of actual SDK validation log |
 | package_filename | Basename of one .msixvc/.msixvc2 output |
