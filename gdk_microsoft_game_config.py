@@ -132,9 +132,13 @@ def prepare_config(intake: dict, asset_root: Path, package_version: str, reviewe
     game = ET.Element("Game", {"configVersion": "1"})
     ET.SubElement(game, "Identity", {"Name": identity["name"], "Publisher": identity["publisher"], "Version": version})
     ET.SubElement(game, "StoreId").text = identity["store_id"]
-    ET.SubElement(game, "MSAAppId").text = identity["msa_app_id"]
-    # Xbox TitleId is an opaque Partner Center hex identifier, not decimal.
-    ET.SubElement(game, "TitleId").text = identity["xbox_title_id"]
+    # Signal Sprint is a standalone Win32 game; its pinned EXE has no Xbox
+    # services imports or identifiable Xbox Live initialization strings.
+    # Microsoft Game Publishing Guide explicitly requires GDK titles that do
+    # NOT use Xbox services to OMIT MSAAppId and TitleId from the retail
+    # MicrosoftGame.config, otherwise players can get Xbox sign-in errors.
+    # Keep the user-provided values in the independently verified Identity
+    # contract; do not silently turn on Xbox services just because IDs exist.
     ET.SubElement(ET.SubElement(game, "Resources"), "Resource", {"Language": "en-US"})
     ET.SubElement(ET.SubElement(game, "ExecutableList"), "Executable",
                   {"Name": "SignalSprint.exe", "Id": "Game", "TargetDeviceFamily": "PC", "Architecture": "x64"})
@@ -152,7 +156,8 @@ def prepare_config(intake: dict, asset_root: Path, package_version: str, reviewe
             or parsed.find("Identity").attrib["Version"] != version
             or parsed.find("ExecutableList/Executable").attrib["Name"] != exe.name
             or parsed.findtext("StoreId") != identity["store_id"]
-            or parsed.findtext("TitleId") != identity["xbox_title_id"]):
+            or parsed.find("TitleId") is not None
+            or parsed.find("MSAAppId") is not None):
         raise ConflictError("GDK generated config round-trip mismatch")
     return {"schema_version": 1, "status": "GDK_CONFIG_CHECK_ONLY",
         "partner_center_selection": "GDK_GAME", "packaging_family": "GDK",

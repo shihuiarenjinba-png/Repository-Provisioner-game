@@ -59,8 +59,13 @@ class MicrosoftGameConfigTests(unittest.TestCase):
         self.assertEqual(xml.find("Identity").attrib["Publisher"], PINNED_SIGNAL_SPRINT_GDK_IDENTITY["publisher"])
         self.assertEqual(xml.find("Identity").attrib["Version"], "1.0.1.0")
         self.assertEqual(xml.findtext("StoreId"), "9N21MJM7S57P")
-        self.assertEqual(xml.findtext("TitleId"), "68721417")
-        self.assertEqual(xml.findtext("MSAAppId"), PINNED_SIGNAL_SPRINT_GDK_IDENTITY["msa_app_id"])
+        # Microsoft requires no TitleId/MSAAppId in retail config when Xbox
+        # services are not used; their receipt remains pinned in the intake.
+        self.assertIsNone(xml.find("TitleId"))
+        self.assertIsNone(xml.find("MSAAppId"))
+        self.assertEqual(self.intake["identity"]["xbox_title_id"], "68721417")
+        self.assertEqual(self.intake["identity"]["msa_app_id"],
+                         PINNED_SIGNAL_SPRINT_GDK_IDENTITY["msa_app_id"])
         self.assertEqual(xml.find("ExecutableList/Executable").attrib["Name"], "SignalSprint.exe")
         self.assertEqual(xml.find("ExecutableList/Executable").attrib["TargetDeviceFamily"], "PC")
         self.assertEqual(result["partner_center_selection"], "GDK_GAME")
@@ -68,6 +73,13 @@ class MicrosoftGameConfigTests(unittest.TestCase):
         self.assertFalse(result["gdk_sdk_validated"])
         self.assertEqual(result["source_sha"], PINNED_SIGNAL_SPRINT_JOB["source_sha"])
         self.assertEqual(result["microsoft_game_config_sha256"], hashlib.sha256(result["microsoft_game_config_xml"].encode()).hexdigest())
+
+    def test_unreviewed_xbox_service_identity_still_rejected(self):
+        # Omitting unused XML elements must not relax the received Identity
+        # contract or permit an attacker to substitute another Xbox title.
+        self.intake["identity"]["xbox_title_id"] = "FFFFFFFF"
+        with self.assertRaisesRegex(ConflictError, "Identity mismatch"):
+            self.build()
 
     def test_wrong_store_id_rejected(self):
         self.intake["identity"]["store_id"] = "9N21MJM7S57Q"
