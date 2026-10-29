@@ -17,7 +17,7 @@ After an authorized CAS and a **real Windows GDK SDK** build, the read-only `gdk
 - `sdk-sidecar-<original filename>`: every allowed sidecar, copied byte-for-byte and individually hashed.
 - `handoff.json`: schema v2, containing `sdk_sidecars_sha256` (transferred basename to SHA-256), source/CAS/factory identity and package/log hashes. Zero sidecars is an empty object.
 
-No other files, symlinks, or nested directories are allowed. Output is created once and never overwritten; a failed copy removes only that new handoff. The sender emits `handoff_manifest_sha256` **outside the transferred directory**.
+Before SDK output intake or receiver acceptance, every filename must be a portable Windows basename: no Win32 reserved devices (including CON/NUL/COM/LPT), alternate-data-stream colon, forbidden punctuation, control characters, trailing dot/space, or Unicode-normalization/case-insensitive collisions. This is deliberately stricter than a Linux filesystem to prevent E2E transfer aliasing or loss on Windows. Synthetic regression tests do not claim a real SDK build.\n\nNo other files, symlinks, or nested directories are allowed. Output is created once and never overwritten; a failed copy removes only that new handoff. The sender emits `handoff_manifest_sha256` **outside the transferred directory**.
 
 The receiving owner invokes:
 
