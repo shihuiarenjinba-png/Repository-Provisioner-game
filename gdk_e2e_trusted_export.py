@@ -9,11 +9,12 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import stat
 import sys
 
 from gdk_e2e_handoff import export_handoff
 from gdk_e2e_handoff_verify import verify_handoff
-from gdk_sdk_result_intake import MAX_JSON, MAX_LOG, SHA256, _hash_file
+from gdk_sdk_result_intake import MAX_JSON, MAX_LOG, MAX_PACKAGE, MAX_SIDECAR, MAX_OUTPUT_FILES, SHA256, _hash_file
 from gdk_sdk_trusted_intake import trusted_intake
 from package_identity_provisioner import ConflictError, HoldError, PINNED_SIGNAL_SPRINT_JOB
 
@@ -54,6 +55,38 @@ def _require_inventory_continuity(trusted: dict, manifest: dict) -> None:
         raise ConflictError("GDK SDK sidecar inventory changed during export")
 
 
+
+def _verify_source_inventory(trusted: dict, package_dir: Path) -> None:
+    """Rehash the first trusted SDK inventory immediately before exporting.
+
+    A sidecar may be modified after trusted_intake returns and before the
+    exporter begins. Reject before creating an E2E handoff destination.
+    The later exporter independently rehashes during the actual copy.
+    """
+    inventory = trusted.get("output_files_sha256")
+    original = trusted.get("package_filename")
+    if (type(inventory) is not dict or not inventory
+            or len(inventory) > MAX_OUTPUT_FILES or type(original) is not str
+            or original not in inventory):
+        raise ConflictError("GDK original SDK inventory missing")
+    if package_dir.is_symlink() or not package_dir.is_dir():
+        raise ConflictError("GDK original SDK output directory missing or linked")
+    files = list(package_dir.iterdir())
+    if len(files) != len(inventory) or {p.name for p in files} != set(inventory):
+        raise ConflictError("GDK original SDK output inventory changed before export")
+    for path in files:
+        if path.is_symlink() or not stat.S_ISREG(path.lstat().st_mode):
+            raise ConflictError("GDK original SDK output contains linked or non-regular file")
+        maximum = MAX_PACKAGE if path.name == original else MAX_SIDECAR
+        expected = inventory[path.name]
+        if type(expected) is not str or not SHA256.fullmatch(expected):
+            raise ConflictError("GDK original SDK inventory digest invalid")
+        if _hash_file(path, maximum, "GDK original SDK output")[0] != expected:
+            raise ConflictError("GDK original SDK output bytes changed before export")
+    if {p.name for p in package_dir.iterdir()} != set(inventory):
+        raise ConflictError("GDK original SDK output inventory changed during precheck")
+
+
 def export_trusted(handoff_path: Path, independent_handoff_sha256: str,
                    plan_path: Path, evidence_path: Path, package_dir: Path,
                    validation_log: Path, output_dir: Path) -> dict:
@@ -82,6 +115,8 @@ def export_trusted(handoff_path: Path, independent_handoff_sha256: str,
     for key in FALSE_FLAGS:
         if trusted.get(key) is not False:
             raise ConflictError("unearned GDK SDK approval: " + key)
+
+    _verify_source_inventory(trusted, package_dir)
 
     # The existing exporter rehashes every source and copies only verified
     # package/log/sidecar bytes to a new, never-overwritten directory.
