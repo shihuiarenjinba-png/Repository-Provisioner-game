@@ -39,11 +39,16 @@ class GdkTrustedE2eExportTests(unittest.TestCase):
             "package_version": "1.0.1.0",
             "package_sha256": "d" * 64,
             "validation_log_sha256": digest(self.log),
+            "package_size_bytes": 123,
+            "sdk_version_claim": "GDK SDK 2026",
+            "sdk_exit_code_claim": 0,
         }
         self.trusted = {
             **self.expected,
             "status": "GDK_TRUSTED_PREBUILD_TO_PACKAGE_BYTES_CHECK_PASS",
             "prebuild_trust_chain_verified": True,
+            "package_filename": "SignalSprint.msixvc",
+            "output_files_sha256": {"SignalSprint.msixvc": "d" * 64},
             "partner_center_selection": "GDK_GAME",
             "gdk_sdk_validation_independently_verified": False,
             "real_msix_pass": False, "e2e_pass": False, "store_submitted": False,
@@ -52,6 +57,7 @@ class GdkTrustedE2eExportTests(unittest.TestCase):
             **self.expected,
             "partner_center_selection": "GDK_GAME",
             "package_format": "MSIXVC2",
+            "original_sdk_filename": "SignalSprint.msixvc",
             "sdk_pack_plan_sha256": digest(self.plan),
             "sdk_result_evidence_sha256": digest(self.evidence),
             "sdk_sidecars_sha256": {},
@@ -159,6 +165,42 @@ class GdkTrustedE2eExportTests(unittest.TestCase):
                 export_trusted(self.anchor, self.trusted_sha, self.plan,
                                self.evidence, self.package_dir,
                                self.log, self.output)
+
+    def test_sidecar_mutation_between_trusted_intake_and_export_rejected(self):
+        # Both the later exporter and receiver agree, but the original SDK
+        # inventory from the trusted intake has different sidecar bytes.
+        self.trusted["output_files_sha256"]["symbols.zip"] = "a" * 64
+        self.manifest["sdk_sidecars_sha256"] = {"sdk-sidecar-symbols.zip": "b" * 64}
+        self.received["sdk_sidecars_sha256"] = dict(self.manifest["sdk_sidecars_sha256"])
+        with self.assertRaisesRegex(ConflictError, "sidecar inventory changed"):
+            self.run_gate()
+
+    def test_matching_trusted_sidecar_inventory_passes(self):
+        self.trusted["output_files_sha256"]["symbols.zip"] = "a" * 64
+        self.manifest["sdk_sidecars_sha256"] = {"sdk-sidecar-symbols.zip": "a" * 64}
+        self.received["sdk_sidecars_sha256"] = dict(self.manifest["sdk_sidecars_sha256"])
+        result, *_ = self.run_gate()
+        self.assertEqual(result["sdk_sidecars_sha256"], self.received["sdk_sidecars_sha256"])
+
+    def test_original_sdk_filename_swap_rejected(self):
+        self.manifest["original_sdk_filename"] = "Other.msixvc"
+        with self.assertRaisesRegex(ConflictError, "original SDK filename"):
+            self.run_gate()
+
+    def test_sdk_package_size_swap_rejected(self):
+        self.manifest["package_size_bytes"] = 124
+        with self.assertRaisesRegex(ConflictError, "package_size_bytes"):
+            self.run_gate()
+
+    def test_sdk_version_claim_swap_rejected(self):
+        self.manifest["sdk_version_claim"] = "Forged SDK"
+        with self.assertRaisesRegex(ConflictError, "sdk_version_claim"):
+            self.run_gate()
+
+    def test_missing_trusted_sdk_inventory_rejected(self):
+        self.trusted.pop("output_files_sha256")
+        with self.assertRaisesRegex(ConflictError, "inventory missing"):
+            self.run_gate()
 
     def test_receiver_sidecar_mismatch_rejected(self):
         self.received["sdk_sidecars_sha256"] = {"sdk-sidecar-forged.ekb": "0" * 64}

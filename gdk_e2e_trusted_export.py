@@ -18,7 +18,8 @@ from gdk_sdk_trusted_intake import trusted_intake
 from package_identity_provisioner import ConflictError, HoldError, PINNED_SIGNAL_SPRINT_JOB
 
 BOUND = ("request_id", "source_sha", "cas_commit_sha", "factory_head_sha",
-         "package_version", "package_sha256", "validation_log_sha256")
+         "package_version", "package_sha256", "package_size_bytes",
+         "validation_log_sha256", "sdk_version_claim", "sdk_exit_code_claim")
 FALSE_FLAGS = ("real_msix_pass", "e2e_pass", "store_submitted",
                "gdk_sdk_validation_independently_verified")
 
@@ -26,6 +27,31 @@ FALSE_FLAGS = ("real_msix_pass", "e2e_pass", "store_submitted",
 def _require_equal(left: dict, right: dict, key: str) -> None:
     if key not in left or key not in right or type(left[key]) is not type(right[key]) or left[key] != right[key]:
         raise ConflictError("GDK trusted E2E mismatch: " + key)
+
+
+def _require_inventory_continuity(trusted: dict, manifest: dict) -> None:
+    """Bind SDK sidecars to the *first* independently anchored intake result.
+
+    Rechecking only the package/log permits an SDK sidecar to change between
+    trusted_intake and export_handoff while both independent checks pass.
+    The original SDK inventory is authoritative, not the later exporter.
+    """
+    original = trusted.get("package_filename")
+    inventory = trusted.get("output_files_sha256")
+    transferred = manifest.get("sdk_sidecars_sha256")
+    if (type(original) is not str or not original or type(inventory) is not dict
+            or type(transferred) is not dict or not inventory):
+        raise ConflictError("GDK trusted SDK output inventory missing")
+    if manifest.get("original_sdk_filename") != original:
+        raise ConflictError("GDK original SDK filename changed during export")
+    if inventory.get(original) != trusted.get("package_sha256"):
+        raise ConflictError("GDK trusted SDK package inventory mismatch")
+    expected_sidecars = {
+        "sdk-sidecar-" + name: digest
+        for name, digest in inventory.items() if name != original
+    }
+    if transferred != expected_sidecars:
+        raise ConflictError("GDK SDK sidecar inventory changed during export")
 
 
 def export_trusted(handoff_path: Path, independent_handoff_sha256: str,
@@ -63,6 +89,7 @@ def export_trusted(handoff_path: Path, independent_handoff_sha256: str,
                               validation_log, output_dir)
     for key in BOUND:
         _require_equal(trusted, manifest, key)
+    _require_inventory_continuity(trusted, manifest)
     if manifest.get("sdk_pack_plan_sha256") != plan_sha or manifest.get("sdk_result_evidence_sha256") != evidence_sha:
         raise ConflictError("GDK exported evidence SHA mismatch")
     if manifest.get("partner_center_selection") != "GDK_GAME" or manifest.get("package_format") != "MSIXVC2":
