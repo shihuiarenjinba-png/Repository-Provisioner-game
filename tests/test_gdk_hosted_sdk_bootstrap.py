@@ -136,9 +136,43 @@ class HostedBootstrapTests(unittest.TestCase):
                                     approved_makepkg_sha256="a" * 64)
         run.assert_not_called()
 
+    def test_push_cannot_install_even_with_approved_pins(self):
+        env = {"CI": "true", "GITHUB_ACTIONS": "true",
+               "RUNNER_OS": "Windows", "RUNNER_ENVIRONMENT": "github-hosted",
+               "GITHUB_EVENT_NAME": "push", "INSTALL_REQUESTED": "true"}
+        with mock.patch.object(bootstrap.sys, "platform", "win32"), \\
+             mock.patch.object(bootstrap, "_winget", return_value=Path("C:/winget.exe")), \\
+             mock.patch.dict(os.environ, env), \\
+             mock.patch.object(bootstrap.subprocess, "run") as run:
+            with self.assertRaisesRegex(HoldError, "manual workflow_dispatch"):
+                bootstrap.bootstrap(install=True, sdk_version="2610.0.8000",
+                                    approved_makepkg_sha256="a" * 64)
+        run.assert_not_called()
+
+    def test_manual_dispatch_without_true_install_input_cannot_install(self):
+        env = {"CI": "true", "GITHUB_ACTIONS": "true",
+               "RUNNER_OS": "Windows", "RUNNER_ENVIRONMENT": "github-hosted",
+               "GITHUB_EVENT_NAME": "workflow_dispatch", "INSTALL_REQUESTED": "false"}
+        with mock.patch.object(bootstrap.sys, "platform", "win32"), \\
+             mock.patch.object(bootstrap, "_winget", return_value=Path("C:/winget.exe")), \\
+             mock.patch.dict(os.environ, env), \\
+             mock.patch.object(bootstrap.subprocess, "run") as run:
+            with self.assertRaisesRegex(HoldError, "install_sdk=true"):
+                bootstrap.bootstrap(install=True, sdk_version="2610.0.8000",
+                                    approved_makepkg_sha256="a" * 64)
+        run.assert_not_called()
+
+    def test_probe_and_install_combination_rejected_before_any_subprocess(self):
+        with mock.patch.object(bootstrap.sys, "platform", "win32"), \\
+             mock.patch.object(bootstrap.subprocess, "run") as run:
+            with self.assertRaisesRegex(HoldError, "cannot be combined"):
+                bootstrap.bootstrap(install=True, probe_versions=True)
+        run.assert_not_called()
+
     def test_invalid_version_and_digest_rejected_before_install(self):
         env = {"CI": "true", "GITHUB_ACTIONS": "true",
-               "RUNNER_OS": "Windows", "RUNNER_ENVIRONMENT": "github-hosted"}
+               "RUNNER_OS": "Windows", "RUNNER_ENVIRONMENT": "github-hosted",
+               "GITHUB_EVENT_NAME": "workflow_dispatch", "INSTALL_REQUESTED": "true"}
         with mock.patch.object(bootstrap.sys, "platform", "win32"), \
              mock.patch.object(bootstrap, "_winget", return_value=Path("C:/winget.exe")), \
              mock.patch.dict(os.environ, env), \
@@ -154,7 +188,8 @@ class HostedBootstrapTests(unittest.TestCase):
 
     def test_winget_failure_holds_without_approval(self):
         env = {"CI": "true", "GITHUB_ACTIONS": "true",
-               "RUNNER_OS": "Windows", "RUNNER_ENVIRONMENT": "github-hosted"}
+               "RUNNER_OS": "Windows", "RUNNER_ENVIRONMENT": "github-hosted",
+               "GITHUB_EVENT_NAME": "workflow_dispatch", "INSTALL_REQUESTED": "true"}
         with mock.patch.object(bootstrap.sys, "platform", "win32"), \
              mock.patch.object(bootstrap, "_winget", return_value=Path("C:/winget.exe")), \
              mock.patch.dict(os.environ, env), \
@@ -170,7 +205,8 @@ class HostedBootstrapTests(unittest.TestCase):
 
     def test_success_only_after_independent_executable_digest(self):
         env = {"CI": "true", "GITHUB_ACTIONS": "true",
-               "RUNNER_OS": "Windows", "RUNNER_ENVIRONMENT": "github-hosted"}
+               "RUNNER_OS": "Windows", "RUNNER_ENVIRONMENT": "github-hosted",
+               "GITHUB_EVENT_NAME": "workflow_dispatch", "INSTALL_REQUESTED": "true"}
         with tempfile.TemporaryDirectory() as temp:
             exe = Path(temp) / "makepkg.exe"
             exe.write_bytes(b"synthetic SDK - NEVER EXECUTED")
