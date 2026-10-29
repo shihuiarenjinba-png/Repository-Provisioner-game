@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from gdk_e2e_trusted_export import export_trusted
+from gdk_e2e_trusted_export import export_trusted, _verify_source_inventory
 from package_identity_provisioner import ConflictError, HoldError, PINNED_SIGNAL_SPRINT_JOB
 
 
@@ -77,6 +77,7 @@ class GdkTrustedE2eExportTests(unittest.TestCase):
     def run_gate(self):
         with mock.patch("gdk_e2e_trusted_export.trusted_intake",
                         return_value=self.trusted) as trusted, \
+             mock.patch("gdk_e2e_trusted_export._verify_source_inventory"), \
              mock.patch("gdk_e2e_trusted_export.export_handoff",
                         side_effect=self.fake_export) as exported, \
              mock.patch("gdk_e2e_trusted_export.verify_handoff",
@@ -201,6 +202,51 @@ class GdkTrustedE2eExportTests(unittest.TestCase):
         self.trusted.pop("output_files_sha256")
         with self.assertRaisesRegex(ConflictError, "inventory missing"):
             self.run_gate()
+
+    def seed_real_sdk_inventory(self):
+        package = self.package_dir / "SignalSprint.msixvc"
+        sidecar = self.package_dir / "symbols.zip"
+        package.write_bytes(b"synthetic GDK package, not a real MSIXVC")
+        sidecar.write_bytes(b"synthetic symbols")
+        self.trusted["package_sha256"] = digest(package)
+        self.trusted["output_files_sha256"] = {
+            package.name: digest(package), sidecar.name: digest(sidecar),
+        }
+        return package, sidecar
+
+    def test_original_sdk_inventory_unchanged_precheck_passes(self):
+        self.seed_real_sdk_inventory()
+        _verify_source_inventory(self.trusted, self.package_dir)
+
+    def test_original_sdk_sidecar_changed_before_export_rejected(self):
+        _, sidecar = self.seed_real_sdk_inventory()
+        sidecar.write_bytes(b"tampered symbols")
+        with self.assertRaisesRegex(ConflictError, "bytes changed before export"):
+            _verify_source_inventory(self.trusted, self.package_dir)
+
+    def test_original_sdk_package_changed_before_export_rejected(self):
+        package, _ = self.seed_real_sdk_inventory()
+        package.write_bytes(b"tampered package")
+        with self.assertRaisesRegex(ConflictError, "bytes changed before export"):
+            _verify_source_inventory(self.trusted, self.package_dir)
+
+    def test_original_sdk_unregistered_file_before_export_rejected(self):
+        self.seed_real_sdk_inventory()
+        (self.package_dir / "extra.ekb").write_bytes(b"extra")
+        with self.assertRaisesRegex(ConflictError, "inventory changed before export"):
+            _verify_source_inventory(self.trusted, self.package_dir)
+
+    def test_original_sdk_missing_file_before_export_rejected(self):
+        _, sidecar = self.seed_real_sdk_inventory()
+        sidecar.unlink()
+        with self.assertRaisesRegex(ConflictError, "inventory changed before export"):
+            _verify_source_inventory(self.trusted, self.package_dir)
+
+    def test_original_sdk_inventory_digest_forgery_rejected(self):
+        self.seed_real_sdk_inventory()
+        self.trusted["output_files_sha256"]["symbols.zip"] = "not-a-sha"
+        with self.assertRaisesRegex(ConflictError, "digest invalid"):
+            _verify_source_inventory(self.trusted, self.package_dir)
 
     def test_receiver_sidecar_mismatch_rejected(self):
         self.received["sdk_sidecars_sha256"] = {"sdk-sidecar-forged.ekb": "0" * 64}
