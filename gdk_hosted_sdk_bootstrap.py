@@ -73,9 +73,13 @@ def _catalog_assessment(status: str, candidates: list[str]) -> dict:
     2604 is a preview (makepkg2.exe); 2610 is the first retail-capable
     MSIXVC2 GDK (managed makepkg.exe). Catalog presence is NOT approval.
     """
-    versions = sorted(set(candidates))[:50]
-    preview = [v for v in versions if v.startswith("2604.")]
-    retail = [v for v in versions if v.startswith("2610.")]
+    # Classify the full catalog BEFORE bounding JSON output. A global first-50
+    # cutoff can silently discard every 2610 version when 2604 has >50 updates,
+    # falsely reporting a retail SDK as NOT_LISTED.
+    ordered = sorted(set(candidates), key=lambda v: tuple(int(p) for p in v.split(".")))
+    preview = [v for v in ordered if v.startswith("2604.")][-50:]
+    retail = [v for v in ordered if v.startswith("2610.")][-50:]
+    versions = sorted(preview + retail, key=lambda v: tuple(int(p) for p in v.split(".")))
     known = status in ("CANDIDATES_FOUND", "NO_2604_OR_2610_CANDIDATES")
     return {
         "catalog_query_status": status,
