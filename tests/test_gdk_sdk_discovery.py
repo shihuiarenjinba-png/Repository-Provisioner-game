@@ -75,6 +75,36 @@ class DiscoveryTests(unittest.TestCase):
         with self.assertRaisesRegex(ConflictError, "linked"):
             discover_makepkg(linked)
 
+    def test_two_distinct_path_versions_hold(self):
+        first = self.tool(self.root / "path-a", bin_subdir=False)
+        second = self.tool(self.root / "path-b", bin_subdir=False)
+        os.environ["PATH"] = str(first.parent) + ";" + str(second.parent)
+        with self.assertRaisesRegex(HoldError, "multiple"):
+            discover_makepkg()
+        self.assertEqual(discover_makepkg(first), first.resolve())
+
+    def test_path_and_gdk_bin_same_file_not_ambiguous(self):
+        path = self.tool(self.root / "path-only", bin_subdir=False)
+        os.environ["PATH"] = str(path.parent)
+        os.environ["GDK_BIN"] = str(path.parent)
+        self.assertEqual(discover_makepkg(), path.resolve())
+
+    def test_empty_and_relative_path_entries_not_searched(self):
+        os.environ["PATH"] = ";.;relative;\"\""
+        with self.assertRaisesRegex(HoldError, "not discovered"):
+            discover_makepkg()
+
+    def test_symlink_parent_rejected(self):
+        path = self.tool(self.root / "actual", bin_subdir=False)
+        linked = self.root / "linked-dir"
+        try:
+            linked.symlink_to(path.parent, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("directory symlink creation unavailable")
+        os.environ["GDK_BIN"] = str(linked)
+        with self.assertRaisesRegex(ConflictError, "linked"):
+            discover_makepkg()
+
     def test_missing_candidate_holds(self):
         with self.assertRaisesRegex(HoldError, "not discovered"):
             discover_makepkg()
