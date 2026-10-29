@@ -140,9 +140,9 @@ class HostedBootstrapTests(unittest.TestCase):
         env = {"CI": "true", "GITHUB_ACTIONS": "true",
                "RUNNER_OS": "Windows", "RUNNER_ENVIRONMENT": "github-hosted",
                "GITHUB_EVENT_NAME": "push", "INSTALL_REQUESTED": "true"}
-        with mock.patch.object(bootstrap.sys, "platform", "win32"), \\
-             mock.patch.object(bootstrap, "_winget", return_value=Path("C:/winget.exe")), \\
-             mock.patch.dict(os.environ, env), \\
+        with mock.patch.object(bootstrap.sys, "platform", "win32"), \
+             mock.patch.object(bootstrap, "_winget", return_value=Path("C:/winget.exe")), \
+             mock.patch.dict(os.environ, env), \
              mock.patch.object(bootstrap.subprocess, "run") as run:
             with self.assertRaisesRegex(HoldError, "manual workflow_dispatch"):
                 bootstrap.bootstrap(install=True, sdk_version="2610.0.8000",
@@ -153,9 +153,9 @@ class HostedBootstrapTests(unittest.TestCase):
         env = {"CI": "true", "GITHUB_ACTIONS": "true",
                "RUNNER_OS": "Windows", "RUNNER_ENVIRONMENT": "github-hosted",
                "GITHUB_EVENT_NAME": "workflow_dispatch", "INSTALL_REQUESTED": "false"}
-        with mock.patch.object(bootstrap.sys, "platform", "win32"), \\
-             mock.patch.object(bootstrap, "_winget", return_value=Path("C:/winget.exe")), \\
-             mock.patch.dict(os.environ, env), \\
+        with mock.patch.object(bootstrap.sys, "platform", "win32"), \
+             mock.patch.object(bootstrap, "_winget", return_value=Path("C:/winget.exe")), \
+             mock.patch.dict(os.environ, env), \
              mock.patch.object(bootstrap.subprocess, "run") as run:
             with self.assertRaisesRegex(HoldError, "install_sdk=true"):
                 bootstrap.bootstrap(install=True, sdk_version="2610.0.8000",
@@ -163,7 +163,7 @@ class HostedBootstrapTests(unittest.TestCase):
         run.assert_not_called()
 
     def test_probe_and_install_combination_rejected_before_any_subprocess(self):
-        with mock.patch.object(bootstrap.sys, "platform", "win32"), \\
+        with mock.patch.object(bootstrap.sys, "platform", "win32"), \
              mock.patch.object(bootstrap.subprocess, "run") as run:
             with self.assertRaisesRegex(HoldError, "cannot be combined"):
                 bootstrap.bootstrap(install=True, probe_versions=True)
