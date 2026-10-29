@@ -148,6 +148,12 @@ class GdkWindowsSdkRunnerTests(unittest.TestCase):
                 (self.output / "SignalSprint.msixvc").write_bytes(b"changed after SDK scan")
             elif mutate == "log":
                 self.log.write_bytes(b"changed log after SDK scan")
+            elif mutate == "plan":
+                # Same parsed JSON, different file bytes: the original plan
+                # must remain immutable throughout SDK intake.
+                self.plan_path.write_bytes(self.plan_path.read_bytes() + b"\n")
+            elif mutate == "sdk":
+                self.fake_makepkg.write_bytes(b"replaced fake SDK during intake")
             return {
                 "status": "GDK_PACKAGE_BYTES_AND_SDK_RECEIPT_CHECK_PASS",
                 "package_sha256": original_inventory["SignalSprint.msixvc"],
@@ -178,6 +184,12 @@ class GdkWindowsSdkRunnerTests(unittest.TestCase):
 
     def test_cas_staging_change_during_intake_rejected(self):
         self._run_with_intake_mutation(changed_recheck=True)
+
+    def test_pack_plan_rewrite_during_intake_rejected(self):
+        self._run_with_intake_mutation(mutate="plan")
+
+    def test_sdk_executable_swap_during_intake_rejected(self):
+        self._run_with_intake_mutation(mutate="sdk")
 
     def test_reject_multiple_packages(self):
         (self.output / "first.msixvc").write_bytes(b"one")
