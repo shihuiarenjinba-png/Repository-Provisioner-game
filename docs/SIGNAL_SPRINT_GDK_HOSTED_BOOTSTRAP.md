@@ -20,6 +20,8 @@ A later **manual** workflow_dispatch on a branch containing this workflow (GitHu
 - `sdk_version` = an independently reviewed exact **2610.x** GDK package version
 - `approved_makepkg_sha256` = an independently approved 64-character digest of the exact expected `makepkg.exe`, obtained outside the install output
 
+WinGet discovery searches **only absolute PATH directories** (not the working directory or relative PATH entries), refuses checkout-local executables, and fails closed when multiple distinct `winget.exe` candidates exist. A successful WinGet probe does **not** approve an SDK version or `makepkg.exe` digest.
+
 The helper refuses installation unless running on GitHub-hosted Windows with `CI=true`, `GITHUB_ACTIONS=true`, `RUNNER_OS=Windows`, `RUNNER_ENVIRONMENT=github-hosted`. It runs only `winget install --id Microsoft.Gaming.GDK --exact --version ... --source winget --silent` with agreement flags. The installed executable must be unambiguously discovered and SHA-256-matched. Installer success alone never counts as approval.
 
 **Current limitation:** The October 2026 package version and independent makepkg.exe digest have not been approved. Do not dispatch install with guessed values. WinGet may not be present or work on the GitHub-hosted Windows image; this route must be tested before being relied on. No automatic installation is authorized by a push or PR. The current PR remains Draft and unmerged.
