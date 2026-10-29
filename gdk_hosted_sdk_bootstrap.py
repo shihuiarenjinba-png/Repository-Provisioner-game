@@ -21,6 +21,7 @@ from package_identity_provisioner import ConflictError, HoldError, PINNED_SIGNAL
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 OCTOBER_GDK = re.compile(r"2610(?:\.\d+){1,3}\Z")
 MAX_EXE = 512 * 1024 * 1024
+VERSION_TOKEN = re.compile(r"(?<![A-Za-z0-9.])2610(?:\.\d+){1,3}(?![A-Za-z0-9.])")
 
 
 def _winget() -> Path | None:
@@ -66,7 +67,32 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def bootstrap(*, install: bool = False, sdk_version: str = "",
+def _probe_versions(winget: Path) -> dict:
+    """Read-only catalog query; candidates are NEVER approved SDK versions.
+
+    Failure to reach the catalog must not be reported as an available version.
+    No package is installed, and the query never executes makepkg.exe.
+    """
+    command = [str(winget), "show", "--id", "Microsoft.Gaming.GDK",
+               "--exact", "--versions", "--source", "winget",
+               "--accept-source-agreements", "--disable-interactivity"]
+    try:
+        completed = subprocess.run(command, timeout=90, check=False,
+                                   stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT, text=True,
+                                   errors="replace")
+    except (OSError, subprocess.TimeoutExpired):
+        return {"catalog_query_status": "UNAVAILABLE",
+                "unapproved_version_candidates": []}
+    if completed.returncode != 0:
+        return {"catalog_query_status": "FAILED",
+                "unapproved_version_candidates": []}
+    candidates = sorted(set(VERSION_TOKEN.findall(completed.stdout or "")))
+    return {"catalog_query_status": "CANDIDATES_FOUND" if candidates else "NO_2610_CANDIDATES",
+            "unapproved_version_candidates": candidates[:50]}
+
+
+def bootstrap(*, install: bool = False, probe_versions: bool = False, sdk_version: str = "",
               approved_makepkg_sha256: str = "") -> dict:
     base = {
         "schema_version": 1,
@@ -87,8 +113,12 @@ def bootstrap(*, install: bool = False, sdk_version: str = "",
         return {**base, "status": "GDK_HOSTED_WINDOWS_REQUIRED", "winget_available": False}
     winget = _winget()
     if not install:
+        catalog = (_probe_versions(winget) if probe_versions and winget is not None
+                   else {"catalog_query_status": "NOT_QUERIED" if not probe_versions
+                         else "WINGET_UNAVAILABLE",
+                         "unapproved_version_candidates": []})
         return {**base, "status": "GDK_HOSTED_WINGET_PROBE_ONLY",
-                "winget_available": winget is not None}
+                "winget_available": winget is not None, **catalog}
     # This is never a local-PC installer. Do not install anything on a
     # developer workstation, even if --install is passed accidentally.
     if (os.environ.get("CI", "").lower() != "true"
@@ -131,11 +161,14 @@ def bootstrap(*, install: bool = False, sdk_version: str = "",
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--install", action="store_true")
+    parser.add_argument("--probe-versions", action="store_true",
+                        help="read-only WinGet catalog query; never approves versions")
     parser.add_argument("--sdk-version", default="")
     parser.add_argument("--approved-makepkg-sha256", default="")
     args = parser.parse_args(argv)
     try:
-        result = bootstrap(install=args.install, sdk_version=args.sdk_version,
+        result = bootstrap(install=args.install, probe_versions=args.probe_versions,
+                           sdk_version=args.sdk_version,
                            approved_makepkg_sha256=args.approved_makepkg_sha256)
     except (ConflictError, HoldError, OSError, ValueError, TypeError) as exc:
         result = {"status": getattr(exc, "status", "HOLD"), "error": str(exc),
