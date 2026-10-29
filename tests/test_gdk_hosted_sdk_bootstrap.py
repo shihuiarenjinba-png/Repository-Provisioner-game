@@ -1,0 +1,114 @@
+"""Offline-only hosted GDK bootstrap regression tests. Never install SDK."""
+import os
+from pathlib import Path
+import tempfile
+import unittest
+from unittest import mock
+
+import gdk_hosted_sdk_bootstrap as bootstrap
+from package_identity_provisioner import ConflictError, HoldError
+
+
+class HostedBootstrapTests(unittest.TestCase):
+    def test_non_windows_probe_never_installs(self):
+        with mock.patch.object(bootstrap.sys, "platform", "linux"):
+            result = bootstrap.bootstrap()
+        self.assertEqual(result["status"], "GDK_HOSTED_WINDOWS_REQUIRED")
+        self.assertFalse(result["sdk_installed_by_this_run"])
+        self.assertFalse(result["real_msix_pass"])
+
+    def test_non_windows_install_rejected(self):
+        with mock.patch.object(bootstrap.sys, "platform", "linux"):
+            with self.assertRaisesRegex(HoldError, "Windows"):
+                bootstrap.bootstrap(install=True)
+
+    def test_windows_probe_no_winget_does_not_install(self):
+        with mock.patch.object(bootstrap.sys, "platform", "win32"), \
+             mock.patch.object(bootstrap, "_winget", return_value=None), \
+             mock.patch.object(bootstrap.subprocess, "run") as run:
+            result = bootstrap.bootstrap()
+        self.assertEqual(result["status"], "GDK_HOSTED_WINGET_PROBE_ONLY")
+        self.assertFalse(result["winget_available"])
+        run.assert_not_called()
+
+    def test_local_machine_install_forbidden_even_with_inputs(self):
+        with mock.patch.object(bootstrap.sys, "platform", "win32"), \
+             mock.patch.object(bootstrap, "_winget", return_value=Path("C:/winget.exe")), \
+             mock.patch.dict(os.environ, {"CI": "true", "GITHUB_ACTIONS": "true",
+                                          "RUNNER_OS": "Windows",
+                                          "RUNNER_ENVIRONMENT": "self-hosted"}), \
+             mock.patch.object(bootstrap.subprocess, "run") as run:
+            with self.assertRaisesRegex(HoldError, "GitHub-hosted"):
+                bootstrap.bootstrap(install=True, sdk_version="2610.0.8000",
+                                    approved_makepkg_sha256="a" * 64)
+        run.assert_not_called()
+
+    def test_invalid_version_and_digest_rejected_before_install(self):
+        env = {"CI": "true", "GITHUB_ACTIONS": "true",
+               "RUNNER_OS": "Windows", "RUNNER_ENVIRONMENT": "github-hosted"}
+        with mock.patch.object(bootstrap.sys, "platform", "win32"), \
+             mock.patch.object(bootstrap, "_winget", return_value=Path("C:/winget.exe")), \
+             mock.patch.dict(os.environ, env), \
+             mock.patch.object(bootstrap.subprocess, "run") as run:
+            for version, digest in (("2604.5.7903", "a" * 64),
+                                    ("2610.0.8000;cmd", "a" * 64),
+                                    ("2610.0.8000", "not-a-sha")):
+                with self.subTest(version=version, digest=digest):
+                    with self.assertRaises(HoldError):
+                        bootstrap.bootstrap(install=True, sdk_version=version,
+                                            approved_makepkg_sha256=digest)
+        run.assert_not_called()
+
+    def test_winget_failure_holds_without_approval(self):
+        env = {"CI": "true", "GITHUB_ACTIONS": "true",
+               "RUNNER_OS": "Windows", "RUNNER_ENVIRONMENT": "github-hosted"}
+        with mock.patch.object(bootstrap.sys, "platform", "win32"), \
+             mock.patch.object(bootstrap, "_winget", return_value=Path("C:/winget.exe")), \
+             mock.patch.dict(os.environ, env), \
+             mock.patch.object(bootstrap.subprocess, "run",
+                               return_value=mock.Mock(returncode=1)) as run:
+            with self.assertRaisesRegex(HoldError, "failed"):
+                bootstrap.bootstrap(install=True, sdk_version="2610.0.8000",
+                                    approved_makepkg_sha256="a" * 64)
+        command = run.call_args.args[0]
+        self.assertEqual(command[:4], ["C:/winget.exe", "install", "--id", "Microsoft.Gaming.GDK"])
+        self.assertIn("--exact", command)
+        self.assertNotIn("upload", command)
+
+    def test_success_only_after_independent_executable_digest(self):
+        env = {"CI": "true", "GITHUB_ACTIONS": "true",
+               "RUNNER_OS": "Windows", "RUNNER_ENVIRONMENT": "github-hosted"}
+        with tempfile.TemporaryDirectory() as temp:
+            exe = Path(temp) / "makepkg.exe"
+            exe.write_bytes(b"synthetic SDK - NEVER EXECUTED")
+            expected = bootstrap._sha256(exe)
+            with mock.patch.object(bootstrap.sys, "platform", "win32"), \
+                 mock.patch.object(bootstrap, "_winget", return_value=Path("C:/winget.exe")), \
+                 mock.patch.dict(os.environ, env), \
+                 mock.patch.object(bootstrap.subprocess, "run",
+                                   return_value=mock.Mock(returncode=0)), \
+                 mock.patch.object(bootstrap, "discover_makepkg", return_value=exe):
+                with self.assertRaisesRegex(ConflictError, "approved SHA"):
+                    bootstrap.bootstrap(install=True, sdk_version="2610.0.8000",
+                                        approved_makepkg_sha256="0" * 64)
+                result = bootstrap.bootstrap(install=True, sdk_version="2610.0.8000",
+                                             approved_makepkg_sha256=expected)
+        self.assertEqual(result["status"], "GDK_HOSTED_SDK_BYTES_APPROVED_NO_BUILD")
+        self.assertEqual(result["makepkg_sha256"], expected)
+        self.assertFalse(result["makepkg_executed"])
+        self.assertFalse(result["cas_return_pass"])
+        self.assertFalse(result["real_msix_pass"])
+        self.assertFalse(result["store_submitted"])
+
+    def test_checkout_winget_rejected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            candidate = Path(temp) / "winget.exe"
+            candidate.write_bytes(b"untrusted")
+            with mock.patch.dict(os.environ, {"GITHUB_WORKSPACE": temp}), \
+                 mock.patch.object(bootstrap.shutil, "which", return_value=str(candidate)):
+                with self.assertRaisesRegex(ConflictError, "checkout"):
+                    bootstrap._winget()
+
+
+if __name__ == "__main__":
+    unittest.main()
