@@ -71,7 +71,7 @@ class HostedBootstrapTests(unittest.TestCase):
                 bootstrap.bootstrap(install=True, sdk_version="2610.0.8000",
                                     approved_makepkg_sha256="a" * 64)
         command = run.call_args.args[0]
-        self.assertEqual(command[:4], ["C:/winget.exe", "install", "--id", "Microsoft.Gaming.GDK"])
+        self.assertEqual(command[:4], [str(Path("C:/winget.exe")), "install", "--id", "Microsoft.Gaming.GDK"])
         self.assertIn("--exact", command)
         self.assertNotIn("upload", command)
 
