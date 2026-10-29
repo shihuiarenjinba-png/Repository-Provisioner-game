@@ -13,7 +13,7 @@ References:
 
 ## Safe workflow
 
-`.github/workflows/signal-sprint-gdk-hosted-bootstrap.yml` on its development branch performs **probe-only** on push. It checks for WinGet but does not install or execute any GDK tool. The artifact is `signal-sprint-gdk-hosted-sdk-bootstrap`.
+`.github/workflows/signal-sprint-gdk-hosted-bootstrap.yml` on its development branch performs **probe-only** on push. It checks for WinGet and, when available, performs a **read-only** `winget show --id Microsoft.Gaming.GDK --exact --versions --source winget` catalog query. It does not install or execute any GDK tool. The artifact is `signal-sprint-gdk-hosted-sdk-bootstrap`. The JSON fields `catalog_query_status` and `unapproved_version_candidates` distinguish an unavailable catalog from candidate version strings. **Catalog versions are unapproved hints, not a version pin, an SDK installation, or a trusted makepkg.exe digest.** Query failure must not be treated as evidence that the SDK is unavailable.
 
 A later **manual** workflow_dispatch on a branch containing this workflow (GitHub generally requires a workflow on the default branch for manual dispatch) may set:
 - `install_sdk=true`
