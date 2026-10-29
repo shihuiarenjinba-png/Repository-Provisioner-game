@@ -69,6 +69,8 @@ def _verify_source_inventory(trusted: dict, package_dir: Path) -> None:
             or len(inventory) > MAX_OUTPUT_FILES or type(original) is not str
             or original not in inventory):
         raise ConflictError("GDK original SDK inventory missing")
+    if inventory[original] != trusted.get("package_sha256"):
+        raise ConflictError("GDK original SDK package digest claim mismatch")
     if package_dir.is_symlink() or not package_dir.is_dir():
         raise ConflictError("GDK original SDK output directory missing or linked")
     files = list(package_dir.iterdir())
