@@ -67,6 +67,29 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def _catalog_assessment(status: str, candidates: list[str]) -> dict:
+    """Separate preview tooling from retail MSIXVC2 readiness.
+
+    2604 is a preview (makepkg2.exe); 2610 is the first retail-capable
+    MSIXVC2 GDK (managed makepkg.exe). Catalog presence is NOT approval.
+    """
+    versions = sorted(set(candidates))[:50]
+    preview = [v for v in versions if v.startswith("2604.")]
+    retail = [v for v in versions if v.startswith("2610.")]
+    known = status in ("CANDIDATES_FOUND", "NO_2604_OR_2610_CANDIDATES")
+    return {
+        "catalog_query_status": status,
+        "unapproved_version_candidates": versions,
+        "unapproved_2604_candidates": preview,
+        "unapproved_2610_candidates": retail,
+        "preview_2604_catalog_status": (
+            "CANDIDATE_UNAPPROVED" if preview else "NOT_LISTED" if known else "UNKNOWN"),
+        "retail_2610_catalog_status": (
+            "CANDIDATE_UNAPPROVED" if retail else "NOT_LISTED" if known else "UNKNOWN"),
+        "retail_msixvc2_sdk_approved": False,
+    }
+
+
 def _probe_versions(winget: Path) -> dict:
     """Read-only catalog query; candidates are NEVER approved SDK versions.
 
@@ -82,15 +105,13 @@ def _probe_versions(winget: Path) -> dict:
                                    stderr=subprocess.STDOUT, text=True,
                                    errors="replace")
     except (OSError, subprocess.TimeoutExpired):
-        return {"catalog_query_status": "UNAVAILABLE",
-                "unapproved_version_candidates": [], "unapproved_2610_candidates": []}
+        return _catalog_assessment("UNAVAILABLE", [])
     if completed.returncode != 0:
-        return {"catalog_query_status": "FAILED",
-                "unapproved_version_candidates": [], "unapproved_2610_candidates": []}
+        return _catalog_assessment("FAILED", [])
     candidates = sorted(set(VERSION_TOKEN.findall(completed.stdout or "")))
-    return {"catalog_query_status": "CANDIDATES_FOUND" if candidates else "NO_2604_OR_2610_CANDIDATES",
-            "unapproved_version_candidates": candidates[:50],
-            "unapproved_2610_candidates": [v for v in candidates if v.startswith("2610.")][:50]}
+    return _catalog_assessment(
+        "CANDIDATES_FOUND" if candidates else "NO_2604_OR_2610_CANDIDATES",
+        candidates)
 
 
 def bootstrap(*, install: bool = False, probe_versions: bool = False, sdk_version: str = "",
@@ -115,9 +136,8 @@ def bootstrap(*, install: bool = False, probe_versions: bool = False, sdk_versio
     winget = _winget()
     if not install:
         catalog = (_probe_versions(winget) if probe_versions and winget is not None
-                   else {"catalog_query_status": "NOT_QUERIED" if not probe_versions
-                         else "WINGET_UNAVAILABLE",
-                         "unapproved_version_candidates": [], "unapproved_2610_candidates": []})
+                   else _catalog_assessment("NOT_QUERIED" if not probe_versions
+                                            else "WINGET_UNAVAILABLE", []))
         return {**base, "status": "GDK_HOSTED_WINGET_PROBE_ONLY",
                 "winget_available": winget is not None, **catalog}
     # This is never a local-PC installer. Do not install anything on a
