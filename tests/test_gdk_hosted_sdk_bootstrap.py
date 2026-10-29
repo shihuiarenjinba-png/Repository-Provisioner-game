@@ -10,6 +10,31 @@ from package_identity_provisioner import ConflictError, HoldError
 
 
 class HostedBootstrapTests(unittest.TestCase):
+    def test_preview_only_catalog_is_not_retail_ready(self):
+        result = bootstrap._catalog_assessment("CANDIDATES_FOUND",
+                                               ["2604.5.7903", "2604.4.7897"])
+        self.assertEqual(result["preview_2604_catalog_status"],
+                         "CANDIDATE_UNAPPROVED")
+        self.assertEqual(result["retail_2610_catalog_status"], "NOT_LISTED")
+        self.assertEqual(result["unapproved_2610_candidates"], [])
+        self.assertFalse(result["retail_msixvc2_sdk_approved"])
+
+    def test_retail_candidate_never_implies_sdk_approval(self):
+        result = bootstrap._catalog_assessment("CANDIDATES_FOUND",
+                                               ["2604.5.7903", "2610.0.8000"])
+        self.assertEqual(result["retail_2610_catalog_status"],
+                         "CANDIDATE_UNAPPROVED")
+        self.assertEqual(result["unapproved_2610_candidates"], ["2610.0.8000"])
+        self.assertFalse(result["retail_msixvc2_sdk_approved"])
+
+    def test_unavailable_catalog_is_unknown_not_absent(self):
+        for status in ("FAILED", "UNAVAILABLE", "WINGET_UNAVAILABLE", "NOT_QUERIED"):
+            with self.subTest(status=status):
+                result = bootstrap._catalog_assessment(status, [])
+                self.assertEqual(result["retail_2610_catalog_status"], "UNKNOWN")
+                self.assertEqual(result["preview_2604_catalog_status"], "UNKNOWN")
+                self.assertFalse(result["retail_msixvc2_sdk_approved"])
+
     def test_catalog_probe_extracts_only_unapproved_2610_candidates(self):
         sample = "Version\n2610.0.8000\n2604.0.7500\n2610.0.8000\n2610.1.8100\n"
         with mock.patch.object(bootstrap.subprocess, "run",
