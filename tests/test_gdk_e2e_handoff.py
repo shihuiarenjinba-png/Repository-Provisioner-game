@@ -7,6 +7,7 @@ import unittest
 from unittest import mock
 
 from gdk_e2e_handoff import export_handoff
+from gdk_e2e_handoff_verify import verify_handoff
 from package_identity_provisioner import ConflictError, PINNED_SIGNAL_SPRINT_JOB
 
 
@@ -115,6 +116,27 @@ class GdkE2eHandoffTests(unittest.TestCase):
             self.assertEqual(manifest["sdk_sidecars_sha256"][transfer],
                              sha((self.package_dir / original).read_bytes()))
         self.assertFalse(manifest["real_msix_pass"])
+
+    def test_full_export_to_receiver_with_sidecars_and_trusted_digest(self):
+        extra = self.package_dir / "SubmissionValidator.xml"
+        extra.write_bytes(b"<synthetic-validator/>")
+        self.evidence["output_files_sha256"][extra.name] = sha(extra.read_bytes())
+        self.export()
+        independently_recorded = sha((self.target / "handoff.json").read_bytes())
+        receipt = verify_handoff(self.target, independently_recorded)
+        self.assertEqual(receipt["sdk_sidecar_count"], 1)
+        self.assertEqual(receipt["sdk_sidecars_sha256"],
+                         {"sdk-sidecar-SubmissionValidator.xml": sha(extra.read_bytes())})
+        self.assertFalse(receipt["real_msix_pass"])
+        self.assertFalse(receipt["e2e_pass"])
+        # The trusted sender digest must fail even if an attacker updates
+        # both the sidecar and the transferred manifest together.
+        (self.target / "sdk-sidecar-SubmissionValidator.xml").write_bytes(b"forged")
+        manifest = json.loads((self.target / "handoff.json").read_text())
+        manifest["sdk_sidecars_sha256"]["sdk-sidecar-SubmissionValidator.xml"] = sha(b"forged")
+        (self.target / "handoff.json").write_text(json.dumps(manifest))
+        with self.assertRaisesRegex(ConflictError, "trusted manifest SHA-256 mismatch"):
+            verify_handoff(self.target, independently_recorded)
 
     def test_sidecar_tamper_rejected_without_partial_handoff(self):
         extra = self.package_dir / "SignalSprint.ekb"
