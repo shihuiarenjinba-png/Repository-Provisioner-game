@@ -20,9 +20,6 @@ class DiscoveryTests(unittest.TestCase):
         self.os_patch = mock.patch("gdk_sdk_discovery.platform.system", return_value="Windows")
         self.os_patch.start()
         self.addCleanup(self.os_patch.stop)
-        self.which_patch = mock.patch("gdk_sdk_discovery.shutil.which", return_value=None)
-        self.which_patch.start()
-        self.addCleanup(self.which_patch.stop)
 
     def tool(self, root, bin_subdir=True):
         path = root / "bin" / "makepkg.exe" if bin_subdir else root / "makepkg.exe"
@@ -93,6 +90,38 @@ class DiscoveryTests(unittest.TestCase):
         os.environ["PATH"] = ";.;relative;\"\""
         with self.assertRaisesRegex(HoldError, "not discovered"):
             discover_makepkg()
+
+    def test_current_directory_executable_is_not_discovered(self):
+        # Windows command lookup can search cwd even with a relative PATH.
+        # Discovery must never accept it without an explicit absolute path.
+        fake = self.tool(self.root, bin_subdir=False)
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(self.root)
+            os.environ["PATH"] = ".;relative;"
+            with self.assertRaisesRegex(HoldError, "not discovered"):
+                discover_makepkg()
+        finally:
+            os.chdir(old_cwd)
+        self.assertEqual(discover_makepkg(fake), fake.resolve())
+
+    def test_relative_explicit_path_rejected(self):
+        fake = self.tool(self.root, bin_subdir=False)
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(self.root)
+            with self.assertRaisesRegex(ConflictError, "absolute"):
+                discover_makepkg(Path("makepkg.exe"))
+        finally:
+            os.chdir(old_cwd)
+
+    def test_relative_environment_sdk_roots_rejected(self):
+        for name in ("GameDK", "GameDKCoreLatest", "GDK_BIN"):
+            with self.subTest(name=name):
+                os.environ[name] = "relative-sdk-root"
+                with self.assertRaisesRegex(ConflictError, "absolute"):
+                    discover_makepkg()
+                os.environ.pop(name)
 
     def test_symlink_parent_rejected(self):
         path = self.tool(self.root / "actual", bin_subdir=False)
