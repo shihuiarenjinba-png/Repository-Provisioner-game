@@ -72,6 +72,7 @@ class GdkE2eHandoffTests(unittest.TestCase):
             "package_filename": self.package.name,
             "package_sha256": sha(self.package.read_bytes()),
             "package_size_bytes": self.package.stat().st_size,
+            "output_files_sha256": {self.package.name: sha(self.package.read_bytes())},
         })
 
     def export(self, target=None):
