@@ -104,10 +104,42 @@ class HostedBootstrapTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             candidate = Path(temp) / "winget.exe"
             candidate.write_bytes(b"untrusted")
-            with mock.patch.dict(os.environ, {"GITHUB_WORKSPACE": temp}), \
-                 mock.patch.object(bootstrap.shutil, "which", return_value=str(candidate)):
+            with mock.patch.dict(os.environ, {"GITHUB_WORKSPACE": temp, "PATH": temp}):
                 with self.assertRaisesRegex(ConflictError, "checkout"):
                     bootstrap._winget()
+
+    def test_cwd_winget_is_not_discovered(self):
+        with tempfile.TemporaryDirectory() as temp:
+            (Path(temp) / "winget.exe").write_bytes(b"fake current-dir executable")
+            with mock.patch.dict(os.environ, {"PATH": "", "GITHUB_WORKSPACE": ""}), \
+                 mock.patch.object(bootstrap.Path, "cwd", return_value=Path(temp)):
+                self.assertIsNone(bootstrap._winget())
+
+    def test_relative_path_entry_is_ignored(self):
+        with tempfile.TemporaryDirectory() as temp:
+            (Path(temp) / "winget.exe").write_bytes(b"fake executable")
+            with mock.patch.dict(os.environ, {"PATH": ".", "GITHUB_WORKSPACE": ""}):
+                self.assertIsNone(bootstrap._winget())
+
+    def test_ambiguous_winget_candidates_fail_closed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            a, b = Path(temp) / "a", Path(temp) / "b"
+            a.mkdir()
+            b.mkdir()
+            (a / "winget.exe").write_bytes(b"fake one")
+            (b / "winget.exe").write_bytes(b"fake two")
+            with mock.patch.dict(os.environ, {"PATH": f"{a};{b}", "GITHUB_WORKSPACE": ""}):
+                with self.assertRaisesRegex(ConflictError, "multiple WinGet"):
+                    bootstrap._winget()
+
+    def test_absolute_path_winget_is_detected_without_execution(self):
+        with tempfile.TemporaryDirectory() as temp:
+            candidate = Path(temp) / "winget.exe"
+            candidate.write_bytes(b"synthetic executable")
+            with mock.patch.dict(os.environ, {"PATH": temp, "GITHUB_WORKSPACE": ""}), \
+                 mock.patch.object(bootstrap.subprocess, "run") as run:
+                self.assertEqual(bootstrap._winget(), candidate)
+            run.assert_not_called()
 
 
 if __name__ == "__main__":
