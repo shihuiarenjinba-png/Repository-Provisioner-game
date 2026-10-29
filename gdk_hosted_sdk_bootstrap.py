@@ -12,7 +12,6 @@ import json
 import os
 from pathlib import Path
 import re
-import shutil
 import subprocess
 import sys
 
@@ -25,19 +24,32 @@ MAX_EXE = 512 * 1024 * 1024
 
 
 def _winget() -> Path | None:
-    candidate = shutil.which("winget.exe")
-    if not candidate:
-        return None
-    path = Path(candidate)
-    if not path.is_absolute() or path.name.lower() != "winget.exe":
-        raise ConflictError("WinGet must resolve to an absolute winget.exe")
+    """Find WinGet only in explicit absolute PATH directories.
+
+    Never use shutil.which on Windows: it may select an executable from the
+    working directory before PATH. Reject ambiguous tools rather than silently
+    choosing one, and never execute a binary from the repository checkout.
+    """
     workspace = os.environ.get("GITHUB_WORKSPACE")
-    if workspace:
-        root = Path(workspace).resolve()
-        resolved = path.resolve()
-        if resolved == root or root in resolved.parents:
+    root = Path(workspace).resolve() if workspace else None
+    found: dict[str, Path] = {}
+    for entry in os.environ.get("PATH", "").split(";"):
+        raw = entry.strip().strip('"')
+        if not raw:
+            continue
+        directory = Path(raw)
+        if not directory.is_absolute():
+            continue
+        candidate = directory / "winget.exe"
+        if not candidate.is_file():
+            continue
+        resolved = candidate.resolve()
+        if root is not None and (resolved == root or root in resolved.parents):
             raise ConflictError("WinGet executable inside checkout is untrusted")
-    return path
+        found.setdefault(str(resolved).casefold(), candidate)
+    if len(found) > 1:
+        raise ConflictError("multiple WinGet executables found on PATH; refusing ambiguous installer")
+    return next(iter(found.values())) if found else None
 
 
 def _sha256(path: Path) -> str:
