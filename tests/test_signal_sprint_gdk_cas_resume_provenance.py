@@ -10,8 +10,8 @@ import unittest
 
 from package_identity_provisioner import (
     ConflictError, GitHubReturnClient, Job, ProductConfig,
+    PINNED_SIGNAL_SPRINT_GDK_IDENTITY, PINNED_SIGNAL_SPRINT_JOB,
 )
-from tests.test_signal_sprint_gdk_identity import raw_job, gdk_identity
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = "c058cbf7fe38e02d929c67d047d717ff74bd522e"
@@ -28,8 +28,22 @@ def encoded(value):
 class GdkCasResumeProvenanceTests(unittest.TestCase):
     def setUp(self):
         self.config = ProductConfig.load(ROOT / "config.json")
-        self.job = Job.validate(raw_job(), self.config)
-        self.official = gdk_identity()
+        self.job = Job.validate({
+            "schema_version": "1.0", **PINNED_SIGNAL_SPRINT_JOB,
+            "display_name": "Signal Sprint",
+            "target_owner": self.config.target_owner,
+            "dry_run": False,
+            "requested_actions": ["BUILD_WINDOWS", "INSPECT_PACKAGE",
+                                  "LOOKUP_OFFICIAL_IDENTITY", "PROPOSE_GITHUB_RETURN"],
+        }, self.config)
+        self.official = {
+            **PINNED_SIGNAL_SPRINT_GDK_IDENTITY,
+            "request_id": self.job.request_id, "product_type": "GAME",
+            "slug": "signal-sprint", "source_sha": SOURCE,
+            "identity_source": "USER_PROVIDED_PARTNER_CENTER",
+            "provided_at": "2026-10-28T10:49:00+09:00",
+            "packaging_family": "GDK",
+        }
         self.package = {"sha256": "d" * 64, "signature_status": "NOTSIGNED"}
         self.approved = {
             "schema_version": "1.0", "reviewed": True,
