@@ -19,6 +19,23 @@ class HostedBootstrapTests(unittest.TestCase):
         self.assertEqual(result["unapproved_2610_candidates"], [])
         self.assertFalse(result["retail_msixvc2_sdk_approved"])
 
+    def test_many_preview_versions_cannot_hide_retail_candidate(self):
+        # A global [:50] applied before classification previously discarded
+        # the 2610 release whenever the 2604 catalog contained >50 entries.
+        versions = [f"2604.{i}.7000" for i in range(75)] + ["2610.0.8000"]
+        result = bootstrap._catalog_assessment("CANDIDATES_FOUND", versions)
+        self.assertEqual(result["retail_2610_catalog_status"], "CANDIDATE_UNAPPROVED")
+        self.assertEqual(result["unapproved_2610_candidates"], ["2610.0.8000"])
+        self.assertEqual(len(result["unapproved_2604_candidates"]), 50)
+        self.assertEqual(len(result["unapproved_version_candidates"]), 51)
+        self.assertFalse(result["retail_msixvc2_sdk_approved"])
+
+    def test_numeric_sdk_versions_are_ordered_correctly(self):
+        result = bootstrap._catalog_assessment("CANDIDATES_FOUND",
+                                               ["2610.10.1", "2610.2.1", "2610.1.1"])
+        self.assertEqual(result["unapproved_2610_candidates"],
+                         ["2610.1.1", "2610.2.1", "2610.10.1"])
+
     def test_retail_candidate_never_implies_sdk_approval(self):
         result = bootstrap._catalog_assessment("CANDIDATES_FOUND",
                                                ["2604.5.7903", "2610.0.8000"])
