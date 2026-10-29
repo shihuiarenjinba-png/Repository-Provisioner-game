@@ -118,6 +118,36 @@ class GdkE2eHandoffVerifyTests(unittest.TestCase):
         with self.assertRaisesRegex(ConflictError, "trusted manifest SHA-256 mismatch"):
             self.check(anchor)
 
+    def test_v2_windows_casefold_collision_rejected(self):
+        self.manifest["schema_version"] = 2
+        self.manifest["sdk_sidecars_sha256"] = {
+            "sdk-sidecar-Report.ekb": sha(b"one"),
+            "sdk-sidecar-report.ekb": sha(b"two"),
+        }
+        with self.assertRaisesRegex(ConflictError, "case-insensitive filename collision"):
+            self.check()
+
+    def test_v2_reserved_windows_device_sidecar_rejected(self):
+        self.manifest["schema_version"] = 2
+        self.manifest["sdk_sidecars_sha256"] = {
+            "sdk-sidecar-CON.ekb": sha(b"fake"),
+        }
+        with self.assertRaisesRegex(ConflictError, "unsafe Windows filename"):
+            self.check()
+
+    def test_v2_ads_sidecar_rejected(self):
+        self.manifest["schema_version"] = 2
+        self.manifest["sdk_sidecars_sha256"] = {
+            "sdk-sidecar-Report:secret.ekb": sha(b"fake"),
+        }
+        with self.assertRaisesRegex(ConflictError, "unsafe Windows filename"):
+            self.check()
+
+    def test_reserved_original_sdk_package_name_rejected(self):
+        self.manifest["original_sdk_filename"] = "NUL.msixvc2"
+        with self.assertRaisesRegex(ConflictError, "unsafe Windows filename"):
+            self.check()
+
     def test_package_tampering_rejected(self):
         self.package.write_bytes(b"modified synthetic package")
         with self.assertRaisesRegex(ConflictError, "package bytes"):
