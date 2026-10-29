@@ -158,6 +158,7 @@ class GdkTrustedE2eExportTests(unittest.TestCase):
             return value
         with mock.patch("gdk_e2e_trusted_export.trusted_intake",
                         return_value=self.trusted), \
+             mock.patch("gdk_e2e_trusted_export._verify_source_inventory"), \
              mock.patch("gdk_e2e_trusted_export.export_handoff",
                         side_effect=mutate), \
              mock.patch("gdk_e2e_trusted_export.verify_handoff",
