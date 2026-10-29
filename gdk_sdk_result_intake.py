@@ -22,6 +22,11 @@ SHA40 = re.compile(r"[0-9a-f]{40}\Z")
 MAX_JSON = 1024 * 1024
 MAX_LOG = 100 * 1024 * 1024
 MAX_PACKAGE = 20 * 1024 * 1024 * 1024
+MAX_SIDECAR = 2 * 1024 * 1024 * 1024
+MAX_OUTPUT_FILES = 16
+# makepkg may emit an EKB, Submission Validator XML/log and a symbol bundle
+# beside the package. They are evidence, never a second package or approval.
+SIDECAR_SUFFIXES = {".ekb", ".xml", ".zip", ".log", ".json"}
 PLAN_FIELDS = {
     "schema_version", "status", "partner_center_selection", "package_format",
     "request_id", "source_sha", "cas_commit_sha", "factory_head_sha",
@@ -36,7 +41,8 @@ RESULT_FIELDS = {
     "package_version", "reviewed_display_name", "verified_receipt_sha256",
     "staging_files_sha256", "sdk_command_argv", "sdk_executable",
     "sdk_version", "sdk_exit_code", "validation_log_sha256",
-    "package_filename", "package_sha256", "package_size_bytes", "store_submitted",
+    "package_filename", "package_sha256", "package_size_bytes",
+    "output_files_sha256", "store_submitted",
 }
 
 
@@ -164,8 +170,29 @@ def intake(plan_path: Path, evidence_path: Path, package_dir: Path,
     if package.resolve(strict=True).parent != directory:
         raise ConflictError("GDK package escapes output directory")
     files = list(directory.iterdir())
-    if len(files) != 1 or files[0].name != filename:
-        raise ConflictError("GDK output must contain exactly one package")
+    inventory = result["output_files_sha256"]
+    if (type(inventory) is not dict or not 1 <= len(inventory) <= MAX_OUTPUT_FILES
+            or set(inventory) != {entry.name for entry in files}):
+        raise ConflictError("GDK output inventory incomplete or unexpected")
+    if inventory.get(filename) != result["package_sha256"]:
+        raise ConflictError("GDK package missing from output inventory")
+    for entry in files:
+        name = entry.name
+        if (not name or name in (".", "..") or len(name) > 240
+                or "/" in name or "\\" in name or any(ord(c) < 32 for c in name)
+                or name.endswith((" ", "."))):
+            raise ConflictError("GDK output filename unsafe")
+        if entry.is_symlink() or not entry.is_file():
+            raise ConflictError("GDK output contains linked or non-file evidence")
+        digest = inventory[name]
+        if type(digest) is not str or not SHA256.fullmatch(digest):
+            raise ConflictError("GDK output inventory digest invalid")
+        if name != filename:
+            if entry.suffix.lower() not in SIDECAR_SUFFIXES:
+                raise ConflictError("GDK output contains unreviewed sidecar")
+            sidecar_sha, _ = _hash_file(entry, MAX_SIDECAR, "GDK SDK sidecar")
+            if sidecar_sha != digest:
+                raise ConflictError("GDK SDK sidecar bytes mismatch")
     if validation_log.is_symlink() or not validation_log.is_file():
         raise HoldError("GDK validation log missing or linked")
     for p in (plan_path, evidence_path, validation_log):
@@ -177,6 +204,8 @@ def intake(plan_path: Path, evidence_path: Path, package_dir: Path,
         raise ConflictError("GDK package bytes mismatch")
     if log_sha != result["validation_log_sha256"]:
         raise ConflictError("GDK validation log bytes mismatch")
+    if {entry.name for entry in directory.iterdir()} != set(inventory):
+        raise ConflictError("GDK output inventory changed during intake")
     return {
         "schema_version": 1,
         "status": "GDK_PACKAGE_BYTES_AND_SDK_RECEIPT_CHECK_PASS",
@@ -187,6 +216,8 @@ def intake(plan_path: Path, evidence_path: Path, package_dir: Path,
         "package_version": plan["package_version"],
         "package_filename": filename, "package_sha256": actual_sha,
         "package_size_bytes": actual_size, "validation_log_sha256": log_sha,
+        "output_files_sha256": dict(sorted(inventory.items())),
+        "sdk_output_sidecar_count": len(inventory) - 1,
         "sdk_version_claim": version, "sdk_exit_code_claim": 0,
         "gdk_sdk_validation_independently_verified": False,
         "real_msix_pass": False, "e2e_pass": False, "store_submitted": False,
