@@ -42,7 +42,8 @@ jobs:
           APPROVED_MAKEPKG_SHA256: ${{ inputs.approved_makepkg_sha256 }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $arguments = @()
+          # Read-only catalog query on push; versions are candidates, never approvals.
+          $arguments = @('--probe-versions')
           if ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch' -and $env:INSTALL_REQUESTED -eq 'true') {
             $arguments = @('--install', '--sdk-version', $env:GDK_VERSION_PIN,
                            '--approved-makepkg-sha256', $env:APPROVED_MAKEPKG_SHA256)
@@ -50,7 +51,7 @@ jobs:
           python gdk_hosted_sdk_bootstrap.py @arguments |
             Tee-Object -FilePath gdk-hosted-sdk-bootstrap.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value 'Signal Sprint GDK hosted bootstrap: see JSON artifact. No CAS, makepkg, Store or install/GUI QA.'
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value 'Signal Sprint GDK hosted bootstrap: see JSON artifact. Version candidates are unapproved; no CAS, makepkg, Store or install/GUI QA.'
       - name: Preserve read-only or approved-install evidence
         if: always()
         uses: actions/upload-artifact@v4
