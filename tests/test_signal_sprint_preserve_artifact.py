@@ -1,4 +1,5 @@
 """Offline, no-GitHub tests of exact-byte original artifact preservation."""
+import errno
 import hashlib
 from pathlib import Path
 import tempfile
@@ -33,6 +34,13 @@ class PreservationTests(unittest.TestCase):
         self.assertFalse(first["real_msix_pass"])
         second = preservation.preserve(self.source, self.destination)
         self.assertEqual(second["status"], "EXISTING_VERIFIED")
+        self.assertEqual((self.destination / preservation.ARCHIVE_NAME).read_bytes(),
+                         self.source.read_bytes())
+
+    def test_filesystem_without_hardlinks_uses_exclusive_copy(self):
+        with patch.object(preservation.os, "link", side_effect=OSError(errno.EOPNOTSUPP, "no hardlinks")):
+            result = preservation.preserve(self.source, self.destination)
+        self.assertEqual(result["status"], "PRESERVED_VERIFIED")
         self.assertEqual((self.destination / preservation.ARCHIVE_NAME).read_bytes(),
                          self.source.read_bytes())
 
