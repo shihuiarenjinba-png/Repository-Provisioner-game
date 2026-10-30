@@ -15,7 +15,7 @@ This is **only** for the existing Signal Sprint product. Do not generate another
 ## Preconditions
 
 1. Provisioner PR #10 check-only validates the reviewed GDK Identity and original pinned EXE.
-2. An explicitly approved Provisioner CAS creates an Identity-only commit on a **separate CAS branch** rooted at the pinned source SHA. The immutable source branch must remain exactly at `c058cbf7fe38e02d929c67d047d717ff74bd522e`. Do **not** run CAS merely because this script exists.
+2. An explicitly approved Provisioner CAS creates an Identity-only commit on the dedicated **`codex/game-signal-sprint-gdk-cas-c058cbf7fe38`** branch rooted at the pinned source SHA. Provisioner creates this branch only with explicit `--apply` and never advances the original source branch. The immutable source branch must remain exactly at `c058cbf7fe38e02d929c67d047d717ff74bd522e`. Do **not** run CAS merely because this script exists.
 3. Record the actual CAS commit SHA, not a guessed value. The CAS commit must have the immutable source SHA as its **only parent** (merge CAS is rejected), and must change **only** `products/signal-sprint/store/approved-identity.json`.
 4. Create a **separate** post-CAS GDK build branch at/after that CAS commit. Check it out locally. Do not re-run Factory source generation or rebuild the original EXE.
 
