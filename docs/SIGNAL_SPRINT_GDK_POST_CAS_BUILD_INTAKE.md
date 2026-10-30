@@ -12,6 +12,12 @@ This is **only** for the existing Signal Sprint product. Do not generate another
 - Internal `SignalSprint.exe` SHA-256: `9c31c3633de0d9e248cd1642f9003962f4f117bf6780cf4fab9f66d1d73485ad`
 - Artifact expires **2026-11-01 03:18:51 UTC**. Preserve the exact ZIP bytes; a rebuild is not a replacement.
 
+## 2026-10-30 original-artifact recovery (verified; not a build)
+
+Before the scheduled GitHub Actions artifact expiration, the **original artifact ID 12706862577** was downloaded again via the authenticated GitHub connector, without rebuilding or modifying the ZIP. Independent local verification of the downloaded 11,094,247-byte ZIP confirmed SHA-256 `e48a0426595dc227988f12944921511a47d5c8feca8b063a161dd0dd61306412`, CRC PASS, the exact three-member archive, and the 11,343,688-byte `SignalSprint.exe` SHA-256 `9c31c3633de0d9e248cd1642f9003962f4f117bf6780cf4fab9f66d1d73485ad`. Both embedded JSON records matched the pinned source SHA and request ID; original provenance remains `EXE_QA_UNSIGNED` / `NOT_BUILT`.
+
+The downloaded original ZIP and a machine-readable verification manifest were supplied as conversation artifacts in the 2026-10-30 GAME run. **A conversation attachment is not a durable GitHub Actions retention extension.** Preserve the downloaded ZIP bytes in an owner-controlled durable location before the original Actions artifact expires on **2026-11-01 03:18:51 UTC**; verify the full archive SHA after any copy. Do not substitute a new ZIP, a repacked ZIP, or a rebuilt EXE even when their extracted files appear identical. This recovery does not authorize CAS, GDK SDK installation, package submission or public release.
+
 ## Preconditions
 
 1. Provisioner PR #10 check-only validates the reviewed GDK Identity and original pinned EXE.
