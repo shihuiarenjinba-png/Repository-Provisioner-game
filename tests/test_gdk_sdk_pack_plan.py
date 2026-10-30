@@ -121,7 +121,7 @@ class GdkSdkPackPlanTests(unittest.TestCase):
 
     def test_missing_staging_file_rejected(self):
         (self.staging / "SmallLogo.png").unlink()
-        with self.assertRaises(OSError):
+        with self.assertRaisesRegex(ConflictError, "inventory changed"):
             self.run_plan()
 
     def test_extra_manifest_entry_rejected(self):
