@@ -117,7 +117,8 @@ def _png_dimensions(path: Path) -> tuple[int, int]:
     try:
         decoder = zlib.decompressobj()
         raw = decoder.decompress(b"".join(idat), expected + 1)
-        raw += decoder.flush(expected + 1 - len(raw))
+        if len(raw) <= expected:
+            raw += decoder.flush(expected + 1 - len(raw))
     except (zlib.error, ValueError) as exc:
         raise ConflictError("GDK icon invalid PNG compressed image: " + path.name) from exc
     if len(raw) != expected or not decoder.eof or decoder.unused_data or decoder.unconsumed_tail:
