@@ -21,12 +21,31 @@ ARCHIVE_NAME = "signal-sprint-original-github-artifact-12706862577.zip"
 ARTIFACT_ID = 12706862577
 
 
+def _reject_redirected_path(path: Path, label: str) -> None:
+    """Reject ancestor symlinks and Windows junctions before copying evidence.
+
+    Checking only destination_dir.is_symlink() misses a linked *parent*
+    directory, allowing an apparently owner-managed backup to be redirected.
+    Recheck again after the copy; this is not a substitute for trusted storage.
+    """
+    for component in (path, *path.parents):
+        try:
+            linked = component.is_symlink()
+            junction = getattr(component, "is_junction", lambda: False)()
+        except (OSError, RuntimeError) as exc:
+            raise HoldError(label + " path cannot be inspected") from exc
+        if linked or junction:
+            raise ConflictError(label + " contains a symlink or junction")
+
+
 def _hash(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
 def preserve(source: Path, destination_dir: Path) -> dict:
     """Create the verified original ZIP once; never overwrite a different file."""
+    _reject_redirected_path(source, "Original artifact")
+    _reject_redirected_path(destination_dir / ARCHIVE_NAME, "Preservation destination")
     inspect_pinned_artifact(source)
     snapshot = source.read_bytes()
     if _hash(snapshot) != ARTIFACT_SHA256:
@@ -38,6 +57,7 @@ def preserve(source: Path, destination_dir: Path) -> dict:
         raise ConflictError("Original artifact and preservation target must be distinct")
 
     def verify_existing() -> str:
+        _reject_redirected_path(target, "Preservation target")
         if target.is_symlink() or not target.is_file():
             raise ConflictError("Preservation target is linked or not a regular file")
         if _hash(target.read_bytes()) != ARTIFACT_SHA256:
@@ -88,6 +108,8 @@ def preserve(source: Path, destination_dir: Path) -> dict:
         finally:
             if temporary is not None:
                 temporary.unlink(missing_ok=True)
+        _reject_redirected_path(source, "Original artifact")
+        _reject_redirected_path(target, "Preservation target")
         verify_existing()
     return {
         "schema_version": 1,
