@@ -144,7 +144,7 @@ class MicrosoftGameConfigTests(unittest.TestCase):
 
     def test_png_invalid_filter_rejected_even_with_valid_crc(self):
         p = self.root / "SmallLogo.png"
-        raw = b"".join(b"\\x05" + b"\\0" * (44 * 4) for _ in range(44))
+        raw = b"".join(b"\x05" + b"\0" * (44 * 4) for _ in range(44))
         p.write_bytes(cfg.PNG_SIGNATURE + chunk(
             b"IHDR", struct.pack(">IIBBBBB", 44, 44, 8, 6, 0, 0, 0)
         ) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
@@ -153,7 +153,7 @@ class MicrosoftGameConfigTests(unittest.TestCase):
 
     def test_png_short_decompressed_image_rejected(self):
         p = self.root / "SmallLogo.png"
-        raw = b"\\0" * 100
+        raw = b"\0" * 100
         p.write_bytes(cfg.PNG_SIGNATURE + chunk(
             b"IHDR", struct.pack(">IIBBBBB", 44, 44, 8, 6, 0, 0, 0)
         ) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
