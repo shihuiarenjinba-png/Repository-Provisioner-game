@@ -85,8 +85,8 @@ class GdkBuildIntakeTests(unittest.TestCase):
             return SOURCE.encode()
         if args == ("merge-base", "--is-ancestor", CAS, BUILD):
             return b""
-        if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", CAS):
-            return intake.APPROVED_PATH.encode()
+        if args == ("diff-tree", "--no-commit-id", "--name-only", "-z", "-r", CAS):
+            return intake.APPROVED_PATH.encode() + b"\x00"
         if args in (("show", CAS + ":" + intake.APPROVED_PATH),
                     ("show", BUILD + ":" + intake.APPROVED_PATH)):
             return json.dumps(self.approved).encode()
@@ -212,8 +212,8 @@ class GdkBuildIntakeTests(unittest.TestCase):
         original = self.fake_git
 
         def wrong_files(repo, *args):
-            if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", CAS):
-                return (intake.APPROVED_PATH + "\\nproducts/signal-sprint/main.py").encode()
+            if args == ("diff-tree", "--no-commit-id", "--name-only", "-z", "-r", CAS):
+                return (intake.APPROVED_PATH + "\x00products/signal-sprint/main.py\x00").encode()
             return original(repo, *args)
 
         with patch.object(intake, "_git", side_effect=wrong_files):
@@ -313,12 +313,59 @@ class GdkBuildIntakeTests(unittest.TestCase):
                 return (changed + "\n" + reverted).encode()
             if args == ("rev-list", "--parents", "-n", "1", changed):
                 return (changed + " " + CAS).encode()
-            if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", changed):
-                return b"products/signal-sprint/main.py"
+            if args == ("diff-tree", "--no-commit-id", "--name-only", "-z", "-r", changed):
+                return b"products/signal-sprint/main.py\x00"
             return original(repo, *args)
 
         with patch.object(intake, "_git", side_effect=tamper_history):
             with self.assertRaisesRegex(ConflictError, "product change in history"):
+                intake.create_intake(self.root, self.zip, CAS, BUILD)
+
+    def test_post_cas_non_ascii_product_filename_rejected(self):
+        # Without -z Git quotes non-ASCII names, obscuring products/ prefix.
+        original = self.fake_git
+        changed = "c" * 40
+
+        def unicode_history(repo, *args):
+            if args == ("rev-list", "--reverse", CAS + ".." + BUILD):
+                return changed.encode()
+            if args == ("rev-list", "--parents", "-n", "1", changed):
+                return (changed + " " + CAS).encode()
+            if args == ("diff-tree", "--no-commit-id", "--name-only", "-z", "-r", changed):
+                return "products/signal-sprint/日本語.txt\x00".encode()
+            return original(repo, *args)
+
+        with patch.object(intake, "_git", side_effect=unicode_history):
+            with self.assertRaisesRegex(ConflictError, "product change in history"):
+                intake.create_intake(self.root, self.zip, CAS, BUILD)
+
+    def test_post_cas_newline_product_filename_rejected(self):
+        original = self.fake_git
+        changed = "c" * 40
+
+        def newline_history(repo, *args):
+            if args == ("rev-list", "--reverse", CAS + ".." + BUILD):
+                return changed.encode()
+            if args == ("rev-list", "--parents", "-n", "1", changed):
+                return (changed + " " + CAS).encode()
+            if args == ("diff-tree", "--no-commit-id", "--name-only", "-z", "-r", changed):
+                return b"products/signal-sprint/line\nname.txt\x00"
+            return original(repo, *args)
+
+        with patch.object(intake, "_git", side_effect=newline_history):
+            with self.assertRaisesRegex(ConflictError, "product change in history"):
+                intake.create_intake(self.root, self.zip, CAS, BUILD)
+
+    def test_malformed_git_path_inventory_rejected(self):
+        original = self.fake_git
+
+        def malformed_paths(repo, *args):
+            if args == ("diff-tree", "--no-commit-id", "--name-only", "-z", "-r", CAS):
+                return intake.APPROVED_PATH.encode()  # missing required NUL
+            return original(repo, *args)
+
+        with patch.object(intake, "_git", side_effect=malformed_paths):
+            with self.assertRaisesRegex(ConflictError, "inventory is malformed"):
                 intake.create_intake(self.root, self.zip, CAS, BUILD)
 
     def test_post_cas_merge_commit_rejected(self):
@@ -345,8 +392,8 @@ class GdkBuildIntakeTests(unittest.TestCase):
                 return doc_commit.encode()
             if args == ("rev-list", "--parents", "-n", "1", doc_commit):
                 return (doc_commit + " " + CAS).encode()
-            if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", doc_commit):
-                return b"docs/SIGNAL_SPRINT_GDK_BUILD.md"
+            if args == ("diff-tree", "--no-commit-id", "--name-only", "-z", "-r", doc_commit):
+                return b"docs/SIGNAL_SPRINT_GDK_BUILD.md\x00"
             return original(repo, *args)
 
         with patch.object(intake, "_git", side_effect=docs_history):
@@ -362,8 +409,8 @@ class GdkBuildIntakeTests(unittest.TestCase):
                 return edit_commit.encode()
             if args == ("rev-list", "--parents", "-n", "1", edit_commit):
                 return (edit_commit + " " + CAS).encode()
-            if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", edit_commit):
-                return intake.APPROVED_PATH.encode()
+            if args == ("diff-tree", "--no-commit-id", "--name-only", "-z", "-r", edit_commit):
+                return intake.APPROVED_PATH.encode() + b"\x00"
             return original(repo, *args)
 
         with patch.object(intake, "_git", side_effect=identity_history):
