@@ -77,6 +77,10 @@ class GdkBuildIntakeTests(unittest.TestCase):
             return b""
         if args == ("rev-list", "--reverse", CAS + ".." + BUILD):
             return b""
+        if args == ("rev-parse", CAS + ":" + intake.APPROVED_PATH):
+            return ("e" * 40).encode()
+        if args == ("rev-parse", BUILD + ":" + intake.APPROVED_PATH):
+            return ("e" * 40).encode()
         if args == ("rev-parse", CAS + "^"):
             return SOURCE.encode()
         if args == ("merge-base", "--is-ancestor", CAS, BUILD):
@@ -194,6 +198,18 @@ class GdkBuildIntakeTests(unittest.TestCase):
 
         with patch.object(intake, "_git", side_effect=wrong_files):
             with self.assertRaisesRegex(ConflictError, "outside approved Identity"):
+                intake.create_intake(self.root, self.zip, CAS, BUILD)
+
+    def test_build_branch_cannot_reformat_approved_identity_bytes(self):
+        original = self.fake_git
+
+        def changed_blob(repo, *args):
+            if args == ("rev-parse", BUILD + ":" + intake.APPROVED_PATH):
+                return ("f" * 40).encode()
+            return original(repo, *args)
+
+        with patch.object(intake, "_git", side_effect=changed_blob):
+            with self.assertRaisesRegex(ConflictError, "Identity bytes"):
                 intake.create_intake(self.root, self.zip, CAS, BUILD)
 
     def test_build_branch_cannot_change_approved_identity(self):
