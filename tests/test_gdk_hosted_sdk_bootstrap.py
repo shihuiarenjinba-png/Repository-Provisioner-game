@@ -103,6 +103,28 @@ class HostedBootstrapTests(unittest.TestCase):
         self.assertEqual(result["unapproved_version_candidates"], [])
         run.assert_not_called()
 
+    def test_untrusted_winget_alias_reports_unknown_without_install(self):
+        with mock.patch.object(bootstrap.sys, "platform", "win32"), \
+             mock.patch.object(bootstrap, "_winget",
+                               side_effect=ConflictError("GDK makepkg candidate cannot be resolved")), \
+             mock.patch.object(bootstrap.subprocess, "run") as run:
+            result = bootstrap.bootstrap(probe_versions=True)
+        self.assertEqual(result["status"], "GDK_HOSTED_WINGET_UNTRUSTED_PROBE_ONLY")
+        self.assertEqual(result["retail_2610_catalog_status"], "UNKNOWN")
+        self.assertFalse(result["winget_available"])
+        self.assertFalse(result["sdk_installed_by_this_run"])
+        run.assert_not_called()
+
+    def test_untrusted_winget_alias_still_blocks_manual_install(self):
+        with mock.patch.object(bootstrap.sys, "platform", "win32"), \
+             mock.patch.object(bootstrap, "_winget",
+                               side_effect=ConflictError("untrusted alias")), \
+             mock.patch.object(bootstrap.subprocess, "run") as run:
+            with self.assertRaisesRegex(ConflictError, "untrusted alias"):
+                bootstrap.bootstrap(install=True, observe_only=True,
+                                    sdk_version="2610.0.8000")
+        run.assert_not_called()
+
     def test_non_windows_probe_never_installs(self):
         with mock.patch.object(bootstrap.sys, "platform", "linux"):
             result = bootstrap.bootstrap()
