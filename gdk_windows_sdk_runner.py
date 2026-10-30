@@ -16,6 +16,7 @@ import subprocess
 import sys
 
 from gdk_sdk_discovery import discover_makepkg
+from gdk_sdk_pack_plan import _reject_redirected_path, make_pack_plan
 from gdk_sdk_handoff_gate import create_sdk_handoff
 from gdk_sdk_result_intake import (
     MAX_JSON, MAX_LOG, MAX_OUTPUT_FILES, MAX_PACKAGE, MAX_SIDECAR,
@@ -38,6 +39,25 @@ def _ensure_equal(actual: dict, expected: dict, label: str) -> None:
 
 def _sdk_executable(explicit_path: Path | None = None) -> Path:
     return discover_makepkg(explicit_path)
+
+
+def _check_runner_paths(output_dir: Path, validation_log: Path,
+                        result_evidence: Path, sdk_handoff: Path,
+                        pack_plan: Path) -> None:
+    """Reject linked ancestors, not only linked leaves, at each trust boundary.
+
+    In particular, an evidence parent or SDK output parent can be swapped to a
+    junction/symlink after the earlier pack-plan gate. This is a fail-closed
+    check, not a handle-level guarantee against concurrent filesystem races.
+    """
+    for path, label in (
+        (output_dir, "GDK SDK output"),
+        (validation_log, "GDK SDK validation log"),
+        (result_evidence, "GDK SDK result evidence"),
+        (sdk_handoff, "GDK SDK trusted handoff"),
+        (pack_plan, "GDK SDK pack plan"),
+    ):
+        _reject_redirected_path(path, label)
 
 
 def _scan_sdk_output(output: Path) -> tuple[str, dict[str, str], int]:
@@ -119,6 +139,8 @@ def run_windows_pack(*, factory_checkout: Path, artifact_zip: Path, cas_sha: str
         raise ConflictError("GDK SDK timeout outside reviewed bounds")
     if type(sdk_version_claim) is not str or not RETAIL_SDK_VERSION.fullmatch(sdk_version_claim):
         raise HoldError("reviewed exact retail GDK 2610.x SDK version pin required")
+    _check_runner_paths(output_dir, validation_log, result_evidence,
+                        sdk_handoff, pack_plan)
     if _hash_file(sdk_handoff, MAX_JSON, "GDK SDK trusted handoff")[0] != trusted_handoff_sha256:
         raise ConflictError("GDK SDK independent handoff SHA mismatch")
     handoff = _read_json(sdk_handoff, "GDK SDK trusted handoff")
@@ -131,7 +153,6 @@ def run_windows_pack(*, factory_checkout: Path, artifact_zip: Path, cas_sha: str
     _ensure_equal(handoff, expected_handoff, "trusted SDK handoff")
     if hashlib.sha256(_canonical(plan)).hexdigest() != handoff["sdk_pack_plan_sha256"]:
         raise ConflictError("GDK SDK pack plan SHA differs from trusted handoff")
-    from gdk_sdk_pack_plan import make_pack_plan
     fresh_plan = make_pack_plan(factory_checkout, artifact_zip, cas_sha, build_sha,
                                 staging_dir, package_version, reviewed_display_name,
                                 preflight_receipt, output_dir)
@@ -170,6 +191,8 @@ def run_windows_pack(*, factory_checkout: Path, artifact_zip: Path, cas_sha: str
     # make_pack_plan verified an empty output earlier, but the directory can
     # change while the independent gates and SDK executable are being checked.
     # Never accept a stale package from a prior run as the new SDK result.
+    _check_runner_paths(output_dir, validation_log, result_evidence,
+                        sdk_handoff, pack_plan)
     if output_dir.is_symlink() or not output_dir.is_dir():
         raise ConflictError("GDK SDK output directory missing or linked before execution")
     if any(output_dir.iterdir()):
@@ -183,6 +206,8 @@ def run_windows_pack(*, factory_checkout: Path, artifact_zip: Path, cas_sha: str
         raise HoldError("GDK SDK execution timed out; output untrusted") from exc
     if completed.returncode != 0:
         raise HoldError("GDK SDK makepkg failed; inspect validation log")
+    _check_runner_paths(output_dir, validation_log, result_evidence,
+                        sdk_handoff, pack_plan)
     if _hash_file(executable, 512 * 1024 * 1024, "GDK makepkg.exe")[0] != trusted_makepkg_sha256:
         raise ConflictError("GDK makepkg.exe changed during execution")
     log_sha, _ = _hash_file(validation_log, MAX_LOG, "GDK SDK validation log")
@@ -224,6 +249,8 @@ def run_windows_pack(*, factory_checkout: Path, artifact_zip: Path, cas_sha: str
             raise ConflictError("GDK SDK pack plan changed during trusted intake")
         if _hash_file(executable, 512 * 1024 * 1024, "GDK makepkg.exe")[0] != trusted_makepkg_sha256:
             raise ConflictError("GDK makepkg.exe changed during trusted intake")
+        _check_runner_paths(output_dir, validation_log, result_evidence,
+                            sdk_handoff, pack_plan)
     except BaseException:
         result_evidence.unlink(missing_ok=True)
         raise
