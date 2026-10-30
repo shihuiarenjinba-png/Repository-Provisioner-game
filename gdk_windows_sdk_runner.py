@@ -16,7 +16,7 @@ import subprocess
 import sys
 
 from gdk_sdk_discovery import discover_makepkg
-from gdk_sdk_pack_plan import _reject_redirected_path, make_pack_plan
+from gdk_sdk_pack_plan import _reject_redirected_path
 from gdk_sdk_handoff_gate import create_sdk_handoff
 from gdk_sdk_result_intake import (
     MAX_JSON, MAX_LOG, MAX_OUTPUT_FILES, MAX_PACKAGE, MAX_SIDECAR,
@@ -153,6 +153,7 @@ def run_windows_pack(*, factory_checkout: Path, artifact_zip: Path, cas_sha: str
     _ensure_equal(handoff, expected_handoff, "trusted SDK handoff")
     if hashlib.sha256(_canonical(plan)).hexdigest() != handoff["sdk_pack_plan_sha256"]:
         raise ConflictError("GDK SDK pack plan SHA differs from trusted handoff")
+    from gdk_sdk_pack_plan import make_pack_plan
     fresh_plan = make_pack_plan(factory_checkout, artifact_zip, cas_sha, build_sha,
                                 staging_dir, package_version, reviewed_display_name,
                                 preflight_receipt, output_dir)
