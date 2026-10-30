@@ -65,6 +65,30 @@ class PreservationTests(unittest.TestCase):
         with self.assertRaisesRegex(HoldError, "not be linked"):
             preservation.preserve(self.source, linked)
 
+    def test_symlinked_destination_ancestor_is_rejected(self):
+        linked_parent = self.destination.parent / "linked-parent"
+        try:
+            linked_parent.symlink_to(self.destination.parent, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("Windows runner cannot create symlinks")
+        redirected_destination = linked_parent / self.destination.name
+        self.assertFalse(redirected_destination.is_symlink())
+        with self.assertRaisesRegex(ConflictError, "symlink or junction"):
+            preservation.preserve(self.source, redirected_destination)
+        self.assertFalse((self.destination / preservation.ARCHIVE_NAME).exists())
+
+    def test_symlinked_source_ancestor_is_rejected(self):
+        linked_parent = self.destination.parent / "linked-source"
+        try:
+            linked_parent.symlink_to(self.source.parent, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("Windows runner cannot create symlinks")
+        redirected_source = linked_parent / self.source.name
+        self.assertFalse(redirected_source.is_symlink())
+        with self.assertRaisesRegex(ConflictError, "symlink or junction"):
+            preservation.preserve(redirected_source, self.destination)
+        self.assertFalse((self.destination / preservation.ARCHIVE_NAME).exists())
+
     def test_target_cannot_be_original(self):
         self.source = self.destination / preservation.ARCHIVE_NAME
         self.source.write_bytes(b"exact original zip fixture")
