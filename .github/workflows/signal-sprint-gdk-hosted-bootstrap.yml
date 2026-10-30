@@ -6,6 +6,11 @@ on:
   push:
     branches:
       - codex/game-gdk-hosted-bootstrap-20261030
+      - codex/game-gdk-cas-resume-provenance-20261030
+    paths:
+      - '.github/workflows/signal-sprint-gdk-hosted-bootstrap.yml'
+      - 'gdk_hosted_sdk_bootstrap.py'
+      - 'gdk_sdk_discovery.py'
   workflow_dispatch:
     inputs:
       install_sdk:
