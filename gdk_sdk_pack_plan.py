@@ -106,6 +106,17 @@ def make_pack_plan(factory_checkout: Path, artifact_zip: Path, cas_sha: str,
     if any(output.iterdir()):
         raise ConflictError("GDK SDK output must be empty before packaging")
 
+    # The earlier recheck verified exactly six files, but a new unreviewed
+    # payload could appear after that snapshot. Re-enumerate at SDK handoff,
+    # not only the six expected filenames, and repeat after hashing.
+    expected_names = set(MAX_FILE_BYTES)
+    def require_exact_staging_inventory() -> None:
+        entries = list(staging.iterdir())
+        if len(entries) != len(expected_names) or {p.name for p in entries} != expected_names:
+            raise ConflictError("GDK SDK staging inventory changed after recheck")
+
+    require_exact_staging_inventory()
+
     # A receipt is not enough: hash the actual six staging files again.
     for name, limit in MAX_FILE_BYTES.items():
         file = staging / name
@@ -116,6 +127,9 @@ def make_pack_plan(factory_checkout: Path, artifact_zip: Path, cas_sha: str,
         if not isinstance(expected, str) or len(expected) != 64 or _digest(file) != expected:
             raise ConflictError("GDK SDK staging changed after recheck: " + name)
 
+    require_exact_staging_inventory()
+    if any(output.iterdir()):
+        raise ConflictError("GDK SDK output changed before packaging")
     for path, label in (
         (factory_checkout, "Factory checkout"),
         (artifact_zip, "Pinned artifact ZIP"),
