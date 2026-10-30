@@ -62,7 +62,7 @@ class PreservationTests(unittest.TestCase):
             linked.symlink_to(self.destination, target_is_directory=True)
         except (OSError, NotImplementedError):
             self.skipTest("Windows runner cannot create symlinks")
-        with self.assertRaisesRegex(HoldError, "not be linked"):
+        with self.assertRaisesRegex(ConflictError, "symlink or junction"):
             preservation.preserve(self.source, linked)
 
     def test_symlinked_destination_ancestor_is_rejected(self):
