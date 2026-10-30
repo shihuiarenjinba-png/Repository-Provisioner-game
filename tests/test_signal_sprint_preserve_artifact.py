@@ -50,7 +50,10 @@ class PreservationTests(unittest.TestCase):
 
     def test_linked_destination_rejected(self):
         linked = self.destination.parent / "linked"
-        linked.symlink_to(self.destination, target_is_directory=True)
+        try:
+            linked.symlink_to(self.destination, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("Windows runner cannot create symlinks")
         with self.assertRaisesRegex(HoldError, "not be linked"):
             preservation.preserve(self.source, linked)
 
