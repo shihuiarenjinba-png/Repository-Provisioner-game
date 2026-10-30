@@ -158,6 +158,26 @@ class GdkBuildIntakeTests(unittest.TestCase):
         with self.assertRaisesRegex(ConflictError, "ZIP bytes changed"):
             intake.create_intake(self.root, self.zip, CAS, BUILD)
 
+    def test_pinned_zip_swap_after_first_hash_is_rejected(self):
+        # An alternate ZIP can have the same members/EXE/JSON and valid CRC,
+        # yet different bytes. The original pinned ZIP digest must still win.
+        original_read = Path.read_bytes
+        swaps = 0
+
+        def swap_after_snapshot(path):
+            nonlocal swaps
+            data = original_read(path)
+            if path == self.zip and swaps == 0:
+                swaps += 1
+                with zipfile.ZipFile(self.zip, "a") as archive:
+                    archive.comment = b"unapproved-zip-comment"
+            return data
+
+        with patch.object(Path, "read_bytes", swap_after_snapshot):
+            with self.assertRaisesRegex(ConflictError, "changed during verification"):
+                intake.create_intake(self.root, self.zip, CAS, BUILD)
+        self.assertEqual(swaps, 1)
+
     def test_extra_zip_member_rejected_even_with_new_digest(self):
         self.make_zip(extra=True)
         with patch.object(intake, "ARTIFACT_SHA256", hashlib.sha256(self.zip.read_bytes()).hexdigest()):
