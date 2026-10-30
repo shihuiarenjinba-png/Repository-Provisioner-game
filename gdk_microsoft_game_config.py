@@ -67,6 +67,15 @@ def _png_dimensions(path: Path) -> tuple[int, int]:
         crc = struct.unpack(">I", data[cursor+8+size:end])[0]
         if zlib.crc32(tag + chunk) != crc:
             raise ConflictError("GDK icon PNG CRC mismatch: " + path.name)
+        # PNG chunk names are ASCII letters and the third (reserved) byte
+        # must be uppercase. Unknown *critical* chunks cannot be ignored:
+        # accepting one would claim artwork is decodable without interpreting
+        # mandatory rendering instructions.
+        if (any(not (65 <= letter <= 90 or 97 <= letter <= 122) for letter in tag)
+                or not 65 <= tag[2] <= 90):
+            raise ConflictError("GDK icon invalid PNG chunk type: " + path.name)
+        if tag not in (b"IHDR", b"PLTE", b"IDAT", b"IEND") and not (tag[0] & 0x20):
+            raise ConflictError("GDK icon unknown critical PNG chunk: " + path.name)
         if cursor == 8:
             if tag != b"IHDR" or size != 13:
                 raise ConflictError("GDK icon missing PNG IHDR: " + path.name)
@@ -82,7 +91,9 @@ def _png_dimensions(path: Path) -> tuple[int, int]:
         elif tag == b"IHDR":
             raise ConflictError("GDK icon duplicate PNG IHDR: " + path.name)
         if tag == b"PLTE":
-            if seen_idat or palette or size == 0 or size % 3 or size > 768:
+            if (seen_idat or palette or size == 0 or size % 3 or size > 768
+                    or color_type in (0, 4)
+                    or (color_type == 3 and size // 3 > (1 << bit_depth))):
                 raise ConflictError("GDK icon invalid PNG palette: " + path.name)
             palette = True
         elif tag == b"IDAT":
