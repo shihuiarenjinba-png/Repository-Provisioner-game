@@ -1,8 +1,10 @@
 """Opt-in, hosted-only Microsoft GDK installation gate for Signal Sprint.
 
 Read-only by default. The installer may run ONLY on an ephemeral GitHub-hosted
-Windows runner with explicit invocation, pinned version, and an independently
-approved makepkg.exe SHA-256. It never executes makepkg, CAS, or Store operations.
+Windows runner with explicit invocation and pinned version. Observation mode records an
+UNAPPROVED makepkg.exe digest for later independent review; approved-install
+mode still requires a separately approved digest. It never executes makepkg,
+CAS, or Store operations.
 """
 from __future__ import annotations
 
@@ -122,7 +124,7 @@ def _probe_versions(winget: Path) -> dict:
 
 
 def bootstrap(*, install: bool = False, probe_versions: bool = False, sdk_version: str = "",
-              approved_makepkg_sha256: str = "") -> dict:
+              approved_makepkg_sha256: str = "", observe_only: bool = False) -> dict:
     base = {
         "schema_version": 1,
         "product": "Signal Sprint",
@@ -138,6 +140,8 @@ def bootstrap(*, install: bool = False, probe_versions: bool = False, sdk_versio
     }
     if install and probe_versions:
         raise HoldError("GDK probe and install modes cannot be combined")
+    if observe_only and not install:
+        raise HoldError("GDK SDK observation requires explicit install")
     if sys.platform != "win32":
         if install:
             raise HoldError("GDK bootstrap installation requires Windows")
@@ -164,7 +168,10 @@ def bootstrap(*, install: bool = False, probe_versions: bool = False, sdk_versio
         raise HoldError("GDK installation requires manual workflow_dispatch with install_sdk=true")
     if type(sdk_version) is not str or not OCTOBER_GDK.fullmatch(sdk_version):
         raise HoldError("explicit October 2026 GDK 2610.x version pin required")
-    if (type(approved_makepkg_sha256) is not str
+    if observe_only:
+        if approved_makepkg_sha256:
+            raise HoldError("observation mode must not accept an approved digest")
+    elif (type(approved_makepkg_sha256) is not str
             or not SHA256.fullmatch(approved_makepkg_sha256)):
         raise HoldError("independently approved makepkg.exe SHA-256 required")
     if winget is None:
@@ -185,6 +192,13 @@ def bootstrap(*, install: bool = False, probe_versions: bool = False, sdk_versio
     # and the installed tool must match the independently supplied digest.
     executable = discover_makepkg()
     observed = _sha256(executable)
+    if observe_only:
+        return {**base, "status": "GDK_HOSTED_SDK_HASH_OBSERVED_UNAPPROVED_NO_BUILD",
+                "winget_available": True, "sdk_installed_by_this_run": True,
+                "sdk_version_candidate_unapproved": sdk_version,
+                "makepkg_sha256_observed_unapproved": observed,
+                "sdk_version_verified": False, "sdk_approved": False,
+                "next_stage": "INDEPENDENT_SDK_VERSION_AND_HASH_REVIEW"}
     if observed != approved_makepkg_sha256:
         raise ConflictError("installed makepkg.exe differs from approved SHA-256")
     return {**base, "status": "GDK_HOSTED_SDK_BYTES_APPROVED_NO_BUILD",
@@ -197,6 +211,8 @@ def bootstrap(*, install: bool = False, probe_versions: bool = False, sdk_versio
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--install", action="store_true")
+    parser.add_argument("--observe-only", action="store_true",
+                        help="manual hosted install for UNAPPROVED digest observation only")
     parser.add_argument("--probe-versions", action="store_true",
                         help="read-only WinGet catalog query; never approves versions")
     parser.add_argument("--sdk-version", default="")
@@ -205,7 +221,8 @@ def main(argv=None) -> int:
     try:
         result = bootstrap(install=args.install, probe_versions=args.probe_versions,
                            sdk_version=args.sdk_version,
-                           approved_makepkg_sha256=args.approved_makepkg_sha256)
+                           approved_makepkg_sha256=args.approved_makepkg_sha256,
+                           observe_only=args.observe_only)
     except (ConflictError, HoldError, OSError, ValueError, TypeError) as exc:
         result = {"status": getattr(exc, "status", "HOLD"), "error": str(exc),
                   "partner_center_selection": "GDK_GAME",
