@@ -85,7 +85,10 @@ def _catalog_assessment(status: str, candidates: list[str]) -> dict:
     preview = [v for v in ordered if v.startswith("2604.")][-50:]
     retail = [v for v in ordered if v.startswith("2610.")][-50:]
     versions = sorted(preview + retail, key=lambda v: tuple(int(p) for p in v.split(".")))
-    known = status in ("CANDIDATES_FOUND", "NO_2604_OR_2610_CANDIDATES")
+    # A successful WinGet command with no recognizable 2604/2610 tokens may
+    # be a localized, truncated, or otherwise unparseable response. It is
+    # UNKNOWN, not proof that the retail SDK is absent from the catalog.
+    known = status == "CANDIDATES_FOUND"
     return {
         "catalog_query_status": status,
         "unapproved_version_candidates": versions,
@@ -119,7 +122,7 @@ def _probe_versions(winget: Path) -> dict:
         return _catalog_assessment("FAILED", [])
     candidates = sorted(set(VERSION_TOKEN.findall(completed.stdout or "")))
     return _catalog_assessment(
-        "CANDIDATES_FOUND" if candidates else "NO_2604_OR_2610_CANDIDATES",
+        "CANDIDATES_FOUND" if candidates else "NO_RECOGNIZED_VERSION_TOKENS",
         candidates)
 
 
