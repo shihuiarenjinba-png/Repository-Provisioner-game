@@ -122,6 +122,25 @@ class GdkSdkPackPlanTests(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "linked"):
             self.run_plan()
 
+    def test_symlinked_ancestor_of_every_sdk_path_rejected(self):
+        # The leaf itself is a regular file/directory. A linked ancestor
+        # must still fail closed before building an MSIXVC2 pack plan.
+        link = self.factory.parent / "redirected-root"
+        try:
+            link.symlink_to(self.factory.parent, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("Windows runner cannot create symlinks")
+        for attribute in ("factory", "staging", "output", "zip", "receipt"):
+            with self.subTest(path=attribute):
+                original = getattr(self, attribute)
+                setattr(self, attribute, link / original.name)
+                try:
+                    self.assertFalse(getattr(self, attribute).is_symlink())
+                    with self.assertRaisesRegex(ConflictError, "linked path"):
+                        self.run_plan()
+                finally:
+                    setattr(self, attribute, original)
+
     def test_receipt_claims_store_submission_rejected(self):
         self.evidence["store_submitted"] = True
         with self.assertRaisesRegex(ConflictError, "store_submitted"):
