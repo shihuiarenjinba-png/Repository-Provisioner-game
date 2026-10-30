@@ -229,6 +229,69 @@ class HostedBootstrapTests(unittest.TestCase):
         self.assertFalse(result["real_msix_pass"])
         self.assertFalse(result["store_submitted"])
 
+    def test_observation_requires_explicit_install(self):
+        with mock.patch.object(bootstrap.sys, "platform", "win32"), \
+             mock.patch.object(bootstrap.subprocess, "run") as run:
+            with self.assertRaisesRegex(HoldError, "requires explicit install"):
+                bootstrap.bootstrap(observe_only=True)
+        run.assert_not_called()
+
+    def test_observation_on_push_is_forbidden_even_with_version(self):
+        env = {"CI": "true", "GITHUB_ACTIONS": "true",
+               "RUNNER_OS": "Windows", "RUNNER_ENVIRONMENT": "github-hosted",
+               "GITHUB_EVENT_NAME": "push", "INSTALL_REQUESTED": "true"}
+        with mock.patch.object(bootstrap.sys, "platform", "win32"), \
+             mock.patch.object(bootstrap, "_winget", return_value=Path("C:/winget.exe")), \
+             mock.patch.dict(os.environ, env), \
+             mock.patch.object(bootstrap.subprocess, "run") as run:
+            with self.assertRaisesRegex(HoldError, "manual workflow_dispatch"):
+                bootstrap.bootstrap(install=True, observe_only=True,
+                                    sdk_version="2610.0.8000")
+        run.assert_not_called()
+
+    def test_observation_rejects_approved_digest_to_avoid_mode_confusion(self):
+        env = {"CI": "true", "GITHUB_ACTIONS": "true",
+               "RUNNER_OS": "Windows", "RUNNER_ENVIRONMENT": "github-hosted",
+               "GITHUB_EVENT_NAME": "workflow_dispatch", "INSTALL_REQUESTED": "true"}
+        with mock.patch.object(bootstrap.sys, "platform", "win32"), \
+             mock.patch.object(bootstrap, "_winget", return_value=Path("C:/winget.exe")), \
+             mock.patch.dict(os.environ, env), \
+             mock.patch.object(bootstrap.subprocess, "run") as run:
+            with self.assertRaisesRegex(HoldError, "must not accept an approved digest"):
+                bootstrap.bootstrap(install=True, observe_only=True,
+                                    sdk_version="2610.0.8000",
+                                    approved_makepkg_sha256="a" * 64)
+        run.assert_not_called()
+
+    def test_manual_observation_returns_unapproved_hash_without_build(self):
+        env = {"CI": "true", "GITHUB_ACTIONS": "true",
+               "RUNNER_OS": "Windows", "RUNNER_ENVIRONMENT": "github-hosted",
+               "GITHUB_EVENT_NAME": "workflow_dispatch", "INSTALL_REQUESTED": "true"}
+        with tempfile.TemporaryDirectory() as temp:
+            exe = Path(temp) / "makepkg.exe"
+            exe.write_bytes(b"synthetic SDK observation - never executed")
+            expected = bootstrap._sha256(exe)
+            with mock.patch.object(bootstrap.sys, "platform", "win32"), \
+                 mock.patch.object(bootstrap, "_winget", return_value=Path("C:/winget.exe")), \
+                 mock.patch.dict(os.environ, env), \
+                 mock.patch.object(bootstrap.subprocess, "run",
+                                   return_value=mock.Mock(returncode=0)) as run, \
+                 mock.patch.object(bootstrap, "discover_makepkg", return_value=exe):
+                result = bootstrap.bootstrap(install=True, observe_only=True,
+                                             sdk_version="2610.0.8000")
+        self.assertEqual(result["status"],
+                         "GDK_HOSTED_SDK_HASH_OBSERVED_UNAPPROVED_NO_BUILD")
+        self.assertEqual(result["makepkg_sha256_observed_unapproved"], expected)
+        self.assertFalse(result["sdk_approved"])
+        self.assertFalse(result["sdk_version_verified"])
+        self.assertFalse(result["makepkg_executed"])
+        self.assertFalse(result["cas_return_pass"])
+        self.assertFalse(result["real_msix_pass"])
+        self.assertFalse(result["e2e_pass"])
+        self.assertFalse(result["store_submitted"])
+        self.assertIn("install", run.call_args.args[0])
+        self.assertNotIn("makepkg", run.call_args.args[0])
+
     def test_checkout_winget_rejected(self):
         with tempfile.TemporaryDirectory() as temp:
             candidate = Path(temp) / "winget.exe"
