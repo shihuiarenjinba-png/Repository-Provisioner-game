@@ -10,7 +10,7 @@ It re-runs the real Git CAS parent/ancestry and approved-identity verification, 
 
 - `SignalSprint.exe` — original EXE SHA-256 `9c31c3633de0d9e248cd1642f9003962f4f117bf6780cf4fab9f66d1d73485ad`
 - `MicrosoftGame.config` — byte-for-byte equal to the generated reviewed XML
-- `StoreLogo.png`, `Logo.png`, `SmallLogo.png`, `SplashScreen.png` — checked for PNG dimensions and CRC by the existing config gate
+- `StoreLogo.png`, `Logo.png`, `SmallLogo.png`, `SplashScreen.png` — checked for PNG dimensions, CRC, IDAT deflate integrity, scanline lengths and filter bytes by the existing config gate
 
 Additional DLLs, nested folders, symlinks, missing files, invalid sizes, modified XML and altered EXE bytes cause fail-closed rejection. The check-only JSON includes SHA-256 of **every** staging file for later Windows re-verification. This is a snapshot, not an atomic filesystem lock; the builder must rehash all six files immediately before `makepkg`.
 
