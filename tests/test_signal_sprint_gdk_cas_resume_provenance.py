@@ -71,7 +71,8 @@ class GdkCasResumeProvenanceTests(unittest.TestCase):
         }
 
     def resume(self, *, parent=SOURCE, extra_file=False,
-               changed_ref=False, missing_commit=False, current_head=CAS):
+               changed_ref=False, missing_commit=False, current_head=CAS,
+               source_moved=False):
         calls = []
         refs = 0
 
@@ -81,7 +82,7 @@ class GdkCasResumeProvenanceTests(unittest.TestCase):
             if endpoint == "graphql":
                 raise AssertionError("resume must never write")
             if endpoint.endswith("git/ref/heads/" + self.job.source_branch):
-                return {"object": {"sha": SOURCE}}
+                return {"object": {"sha": OTHER if source_moved else SOURCE}}
             if endpoint.endswith("git/ref/heads/" + CAS_BRANCH):
                 refs += 1
                 return {"object": {"sha": OTHER if changed_ref and refs > 1 else current_head}}
@@ -131,6 +132,10 @@ class GdkCasResumeProvenanceTests(unittest.TestCase):
     def test_branch_movement_during_resume_is_conflict(self):
         with self.assertRaisesRegex(ConflictError, "moved during CAS resume"):
             self.resume(changed_ref=True)
+
+    def test_immutable_source_movement_blocks_cas_resume(self):
+        with self.assertRaisesRegex(ConflictError, "Immutable Signal Sprint source branch moved"):
+            self.resume(source_moved=True)
 
     def test_identity_existing_at_original_source_is_not_cas(self):
         with self.assertRaisesRegex(ConflictError, "cannot predate CAS"):
