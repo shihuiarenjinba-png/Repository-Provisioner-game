@@ -17,6 +17,8 @@ import sys
 
 from package_identity_provisioner import ConflictError, HoldError, PINNED_SIGNAL_SPRINT_JOB
 from gdk_windows_filename import validate_windows_basename, validate_unique_windows_names
+from gdk_build_intake import EXE_SHA256
+from gdk_msixvc2_preflight import MAX_FILE_BYTES
 
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 SHA40 = re.compile(r"[0-9a-f]{40}\Z")
@@ -179,10 +181,15 @@ def intake(plan_path: Path, evidence_path: Path, package_dir: Path,
     if type(plan["verified_receipt_sha256"]) is not str or not SHA256.fullmatch(plan["verified_receipt_sha256"]):
         raise ConflictError("GDK preflight receipt SHA invalid")
     hashes = plan["staging_files_sha256"]
-    if type(hashes) is not dict or len(hashes) != 6 or "SignalSprint.exe" not in hashes or any(
+    # Intake must independently enforce the exact reviewed GDK payload, not
+    # merely accept any six self-reported filenames and hashes. A plan/result
+    # pair could otherwise agree on a substituted executable or asset list.
+    if type(hashes) is not dict or set(hashes) != set(MAX_FILE_BYTES) or any(
         type(v) is not str or not SHA256.fullmatch(v) for v in hashes.values()
     ):
-        raise ConflictError("GDK staging hashes invalid")
+        raise ConflictError("GDK staging hashes invalid or unreviewed payload")
+    if hashes["SignalSprint.exe"] != EXE_SHA256:
+        raise ConflictError("GDK staging immutable executable SHA mismatch")
     argv = plan["sdk_command_argv_not_executed"]
     if type(argv) is not list or len(argv) != 9 or not all(type(x) is str for x in argv):
         raise ConflictError("GDK SDK argv shape invalid")
