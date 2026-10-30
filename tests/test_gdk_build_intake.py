@@ -62,13 +62,18 @@ class GdkBuildIntakeTests(unittest.TestCase):
         self.calls.append(args)
         if args == ("rev-parse", "refs/heads/" + PINNED_SIGNAL_SPRINT_JOB["source_branch"]):
             return SOURCE.encode()
+        if args == ("rev-parse", "refs/heads/codex/game-signal-sprint-gdk-cas-" + SOURCE[:12]):
+            return CAS.encode()
+        if args == ("rev-parse", "refs/heads/codex/game-signal-sprint-gdk-build-fixture"):
+            return BUILD.encode()
         if args == ("rev-list", "--parents", "-n", "1", CAS):
             return (CAS + " " + SOURCE).encode()
         if args == ("rev-parse", "HEAD"):
             return BUILD.encode()
         if args == ("symbolic-ref", "--short", "HEAD"):
             return b"codex/game-signal-sprint-gdk-build-fixture"
-        if args == ("status", "--porcelain"):
+        if args in (("status", "--porcelain"),
+                    ("status", "--porcelain", "--untracked-files=all")):
             return b""
         if args == ("rev-list", "--reverse", CAS + ".." + BUILD):
             return b""
@@ -328,6 +333,100 @@ class GdkBuildIntakeTests(unittest.TestCase):
         with patch.object(intake, "_git", side_effect=identity_history):
             with self.assertRaisesRegex(ConflictError, "product change in history"):
                 intake.create_intake(self.root, self.zip, CAS, BUILD)
+
+    def test_missing_dedicated_cas_return_ref_rejected(self):
+        original = self.fake_git
+        cas_ref = "refs/heads/codex/game-signal-sprint-gdk-cas-" + SOURCE[:12]
+
+        def missing_return(repo, *args):
+            if args == ("rev-parse", cas_ref):
+                raise ConflictError("GDK build Git ancestry/content verification failed")
+            return original(repo, *args)
+
+        with patch.object(intake, "_git", side_effect=missing_return):
+            with self.assertRaisesRegex(ConflictError, "verification failed"):
+                intake.create_intake(self.root, self.zip, CAS, BUILD)
+
+    def test_different_cas_branch_head_rejected(self):
+        original = self.fake_git
+        cas_ref = "refs/heads/codex/game-signal-sprint-gdk-cas-" + SOURCE[:12]
+
+        def wrong_cas(repo, *args):
+            if args == ("rev-parse", cas_ref):
+                return ("f" * 40).encode()
+            return original(repo, *args)
+
+        with patch.object(intake, "_git", side_effect=wrong_cas):
+            with self.assertRaisesRegex(ConflictError, "CAS branch does not match"):
+                intake.create_intake(self.root, self.zip, CAS, BUILD)
+
+    def test_cas_branch_moves_during_verification_rejected(self):
+        original = self.fake_git
+        cas_ref = "refs/heads/codex/game-signal-sprint-gdk-cas-" + SOURCE[:12]
+        reads = 0
+
+        def racing_cas(repo, *args):
+            nonlocal reads
+            if args == ("rev-parse", cas_ref):
+                reads += 1
+                return (CAS if reads == 1 else "f" * 40).encode()
+            return original(repo, *args)
+
+        with patch.object(intake, "_git", side_effect=racing_cas):
+            with self.assertRaisesRegex(ConflictError, "CAS branch moved during"):
+                intake.create_intake(self.root, self.zip, CAS, BUILD)
+        self.assertEqual(reads, 2)
+
+    def test_build_branch_moves_during_verification_rejected(self):
+        original = self.fake_git
+        build_ref = "refs/heads/codex/game-signal-sprint-gdk-build-fixture"
+        reads = 0
+
+        def racing_build(repo, *args):
+            nonlocal reads
+            if args == ("rev-parse", build_ref):
+                reads += 1
+                return (BUILD if reads == 1 else "f" * 40).encode()
+            return original(repo, *args)
+
+        with patch.object(intake, "_git", side_effect=racing_build):
+            with self.assertRaisesRegex(ConflictError, "build branch moved during"):
+                intake.create_intake(self.root, self.zip, CAS, BUILD)
+        self.assertEqual(reads, 2)
+
+    def test_source_branch_moves_during_verification_rejected(self):
+        original = self.fake_git
+        source_ref = "refs/heads/" + PINNED_SIGNAL_SPRINT_JOB["source_branch"]
+        reads = 0
+
+        def racing_source(repo, *args):
+            nonlocal reads
+            if args == ("rev-parse", source_ref):
+                reads += 1
+                return (SOURCE if reads == 1 else "f" * 40).encode()
+            return original(repo, *args)
+
+        with patch.object(intake, "_git", side_effect=racing_source):
+            with self.assertRaisesRegex(ConflictError, "source branch moved during"):
+                intake.create_intake(self.root, self.zip, CAS, BUILD)
+        self.assertEqual(reads, 2)
+
+    def test_worktree_becomes_dirty_during_verification_rejected(self):
+        original = self.fake_git
+        reads = 0
+
+        def racing_worktree(repo, *args):
+            nonlocal reads
+            if args == ("status", "--porcelain", "--untracked-files=all"):
+                reads += 1
+                return b"" if reads == 1 else b"?? late-file.txt"
+            return original(repo, *args)
+
+        with patch.object(intake, "_git", side_effect=racing_worktree):
+            with self.assertRaisesRegex(ConflictError, "checkout changed during"):
+                intake.create_intake(self.root, self.zip, CAS, BUILD)
+        self.assertEqual(reads, 2)
+
 
 
 if __name__ == "__main__":
