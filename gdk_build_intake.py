@@ -60,6 +60,23 @@ def _git(repo: Path, *args: str) -> bytes:
     return result.stdout.strip()
 
 
+def _changed_paths(repo: Path, commit: str) -> list[bytes]:
+    """Read literal NUL-delimited Git paths; never trust quoted display names.
+
+    Without -z, Git C-quotes paths containing non-ASCII/control characters.
+    The leading quote hides a products/ prefix from naive startswith checks.
+    """
+    raw = _git(repo, "diff-tree", "--no-commit-id", "--name-only", "-z", "-r", commit)
+    if not raw:
+        return []
+    if not raw.endswith(b"\x00"):
+        raise ConflictError("GDK Git changed-path inventory is malformed")
+    paths = raw[:-1].split(b"\x00")
+    if any(not path for path in paths):
+        raise ConflictError("GDK Git changed-path inventory contains an empty path")
+    return paths
+
+
 def verify_cas_checkout(repo: Path, cas_sha: str, build_sha: str) -> dict:
     source = PINNED_SIGNAL_SPRINT_JOB["source_sha"]
     if (not isinstance(cas_sha, str) or not SHA40.fullmatch(cas_sha)
@@ -97,8 +114,8 @@ def verify_cas_checkout(repo: Path, cas_sha: str, build_sha: str) -> dict:
     _git(repo, "merge-base", "--is-ancestor", cas_sha, build_sha)
     # The atomic CAS must change only the reviewed Identity file, not product
     # source. A later build-branch commit must not replace that Identity.
-    changed = _git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", cas_sha)
-    if changed.decode("utf-8") != APPROVED_PATH:
+    changed = _changed_paths(repo, cas_sha)
+    if changed != [APPROVED_PATH.encode("utf-8")]:
         raise ConflictError("GDK CAS commit changed files outside approved Identity")
     # Compare Git blob identities, not only parsed JSON. Reformatting or
     # changing trailing whitespace must not silently replace reviewed bytes.
@@ -140,9 +157,8 @@ def verify_cas_checkout(repo: Path, cas_sha: str, build_sha: str) -> dict:
         parents = _git(repo, "rev-list", "--parents", "-n", "1", commit).decode().split()
         if len(parents) != 2 or parents[0] != commit:
             raise ConflictError("GDK post-CAS merge or malformed commit requires review")
-        changed = _git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", commit)
-        for path in changed.decode("utf-8").splitlines():
-            if path.startswith("products/") or path == APPROVED_PATH:
+        for path in _changed_paths(repo, commit):
+            if path.startswith(b"products/") or path == APPROVED_PATH.encode("utf-8"):
                 raise ConflictError("GDK post-CAS product change in history")
     # Re-read all three refs after the expensive ancestry/content checks. A
     # branch update during verification must not produce a stale PASS receipt.
