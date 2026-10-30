@@ -18,6 +18,7 @@ SOURCE = "c058cbf7fe38e02d929c67d047d717ff74bd522e"
 CAS = "b" * 40
 OTHER = "c" * 40
 TARGET = "products/signal-sprint/store/approved-identity.json"
+CAS_BRANCH = "codex/game-signal-sprint-gdk-cas-" + SOURCE[:12]
 
 
 def encoded(value):
@@ -79,7 +80,9 @@ class GdkCasResumeProvenanceTests(unittest.TestCase):
             calls.append(endpoint)
             if endpoint == "graphql":
                 raise AssertionError("resume must never write")
-            if "git/ref/heads/" in endpoint:
+            if endpoint.endswith("git/ref/heads/" + self.job.source_branch):
+                return {"object": {"sha": SOURCE}}
+            if endpoint.endswith("git/ref/heads/" + CAS_BRANCH):
                 refs += 1
                 return {"object": {"sha": OTHER if changed_ref and refs > 1 else current_head}}
             if "/manifest.json" in endpoint:
@@ -109,7 +112,8 @@ class GdkCasResumeProvenanceTests(unittest.TestCase):
         result, calls, refs = self.resume()
         self.assertEqual(result["status"], "EXISTING_VERIFIED")
         self.assertEqual(result["commit_sha"], CAS)
-        self.assertEqual(refs, 2, "branch must be rechecked after commit inspection")
+        self.assertEqual(result["branch"], CAS_BRANCH)
+        self.assertEqual(refs, 2, "CAS branch must be rechecked after commit inspection")
         self.assertFalse(any(endpoint == "graphql" for endpoint in calls))
 
     def test_matching_identity_with_changed_source_history_is_conflict(self):
