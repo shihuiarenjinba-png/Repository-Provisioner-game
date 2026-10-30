@@ -25,6 +25,33 @@ Authoritative references:
 - https://learn.microsoft.com/en-us/gaming/gdk/docs/features/common/packaging/overviews/packaging-getting-started-for-pc-msixvc2
 - https://learn.microsoft.com/en-us/gaming/gdk/docs/features/common/packaging/overviews/packaging-msixvc2-overview
 
+## Two-step SDK hash discovery (contract prepared; no installation performed)
+
+The earlier install gate required an independently approved `makepkg.exe` SHA-256
+*before* any hosted runner could obtain its bytes. The optional **observe-only**
+mode separates byte discovery from approval. It does **not** approve the SDK.
+
+After Microsoft publishes a specific official 2610.x version, a human may
+explicitly dispatch the hosted workflow with `install_sdk=true`,
+`observe_only=true`, and an exact `sdk_version`. Only that explicit
+manual dispatch may install the selected SDK on the ephemeral GitHub-hosted
+Windows runner. The resulting evidence status is
+`GDK_HOSTED_SDK_HASH_OBSERVED_UNAPPROVED_NO_BUILD`; it records
+`makepkg_sha256_observed_unapproved`, `sdk_approved=false`, and
+`sdk_version_verified=false`. It never invokes `makepkg.exe` and cannot
+set CAS, real-package, E2E, or Store success. This run has **not** been
+dispatched and no 2610.x version is currently selected.
+
+An independent owner review must then verify the official SDK version,
+installer provenance and executable hash via a separate trusted channel.
+Only after that review may a separate manual dispatch use
+`install_sdk=true`, `observe_only=false`, the exact approved
+`sdk_version`, and `approved_makepkg_sha256`. Push and PR runs remain
+read-only, and the Python gate refuses installation on local/self-hosted
+Windows. Observation with an approval digest is rejected to prevent
+confusing the two modes. A GitHub workflow_dispatch may require the workflow
+to exist on the default branch; do not merge this Draft merely to enable it.
+
 A later **manual** workflow_dispatch on a branch containing this workflow (GitHub generally requires a workflow on the default branch for manual dispatch) may set:
 - `install_sdk=true`
 - `sdk_version` = an independently reviewed exact **2610.x** GDK package version
