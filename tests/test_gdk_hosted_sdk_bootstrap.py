@@ -52,6 +52,25 @@ class HostedBootstrapTests(unittest.TestCase):
                 self.assertEqual(result["preview_2604_catalog_status"], "UNKNOWN")
                 self.assertFalse(result["retail_msixvc2_sdk_approved"])
 
+    def test_successful_unparseable_catalog_is_unknown_not_absent(self):
+        # A zero-token success is not evidence that 2610 is unavailable.
+        result = bootstrap._catalog_assessment("NO_RECOGNIZED_VERSION_TOKENS", [])
+        self.assertEqual(result["retail_2610_catalog_status"], "UNKNOWN")
+        self.assertEqual(result["preview_2604_catalog_status"], "UNKNOWN")
+        self.assertFalse(result["retail_msixvc2_sdk_approved"])
+
+    def test_successful_catalog_with_only_unrecognized_versions_is_unknown(self):
+        # WinGet can return localized/truncated text or only older versions.
+        with mock.patch.object(bootstrap.subprocess, "run",
+                               return_value=mock.Mock(returncode=0,
+                                                      stdout="Version\\n2510.5.6322\\n")) as run:
+            result = bootstrap._probe_versions(Path("C:/approved/winget.exe"))
+        self.assertEqual(result["catalog_query_status"], "NO_RECOGNIZED_VERSION_TOKENS")
+        self.assertEqual(result["retail_2610_catalog_status"], "UNKNOWN")
+        self.assertEqual(result["unapproved_2610_candidates"], [])
+        self.assertFalse(result["retail_msixvc2_sdk_approved"])
+        self.assertNotIn("install", run.call_args.args[0])
+
     def test_catalog_probe_extracts_only_unapproved_2610_candidates(self):
         sample = "Version\n2610.0.8000\n2604.0.7500\n2610.0.8000\n2610.1.8100\n"
         with mock.patch.object(bootstrap.subprocess, "run",
