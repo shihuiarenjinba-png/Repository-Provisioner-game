@@ -4,6 +4,9 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
+
+import gdk_sdk_result_intake as sdk_intake
 
 from gdk_sdk_result_intake import intake
 from package_identity_provisioner import ConflictError, PINNED_SIGNAL_SPRINT_JOB
@@ -93,6 +96,55 @@ class GdkSdkResultIntakeTests(unittest.TestCase):
         self.log_path.write_bytes(b"tampered")
         with self.assertRaisesRegex(ConflictError, "validation log bytes"):
             self.check()
+
+    def test_plan_rewritten_during_large_package_hash_rejected(self):
+        self.plan_path.write_text(json.dumps(self.plan))
+        self.evidence_path.write_text(json.dumps(self.evidence))
+        original_hash = sdk_intake._hash_file
+
+        def rewrite_after_package(path, *args):
+            value = original_hash(path, *args)
+            if Path(path) == self.package:
+                # Still valid JSON, but not the bytes actually reviewed.
+                self.plan_path.write_bytes(self.plan_path.read_bytes() + b" ")
+            return value
+
+        with patch.object(sdk_intake, "_hash_file", side_effect=rewrite_after_package):
+            with self.assertRaisesRegex(ConflictError, "GDK plan changed during intake"):
+                intake(self.plan_path, self.evidence_path, self.output, self.log_path)
+
+    def test_sdk_result_rewritten_during_large_package_hash_rejected(self):
+        self.plan_path.write_text(json.dumps(self.plan))
+        self.evidence_path.write_text(json.dumps(self.evidence))
+        original_hash = sdk_intake._hash_file
+
+        def rewrite_after_package(path, *args):
+            value = original_hash(path, *args)
+            if Path(path) == self.package:
+                self.evidence_path.write_bytes(self.evidence_path.read_bytes() + b" ")
+            return value
+
+        with patch.object(sdk_intake, "_hash_file", side_effect=rewrite_after_package):
+            with self.assertRaisesRegex(ConflictError, "GDK SDK result changed during intake"):
+                intake(self.plan_path, self.evidence_path, self.output, self.log_path)
+
+    def test_sidecar_rewritten_during_large_package_hash_rejected(self):
+        sidecar = self.output / "SubmissionValidator.xml"
+        sidecar.write_bytes(b"<reviewed/>")
+        self.evidence["output_files_sha256"][sidecar.name] = sha(sidecar.read_bytes())
+        self.plan_path.write_text(json.dumps(self.plan))
+        self.evidence_path.write_text(json.dumps(self.evidence))
+        original_hash = sdk_intake._hash_file
+
+        def rewrite_after_package(path, *args):
+            value = original_hash(path, *args)
+            if Path(path) == self.package:
+                sidecar.write_bytes(b"<modified/>")
+            return value
+
+        with patch.object(sdk_intake, "_hash_file", side_effect=rewrite_after_package):
+            with self.assertRaisesRegex(ConflictError, "GDK SDK sidecar changed during intake"):
+                intake(self.plan_path, self.evidence_path, self.output, self.log_path)
 
     def test_wrong_source_rejected(self):
         self.evidence["source_sha"] = "f" * 40
