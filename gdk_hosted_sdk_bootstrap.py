@@ -146,7 +146,19 @@ def bootstrap(*, install: bool = False, probe_versions: bool = False, sdk_versio
         if install:
             raise HoldError("GDK bootstrap installation requires Windows")
         return {**base, "status": "GDK_HOSTED_WINDOWS_REQUIRED", "winget_available": False}
-    winget = _winget()
+    try:
+        winget = _winget()
+    except (ConflictError, HoldError) as exc:
+        # Hosted images may expose an unresolvable App Installer alias on PATH.
+        # A read-only catalog probe should report UNKNOWN instead of failing
+        # the whole workflow or claiming that retail SDK versions are absent.
+        # Installation must still fail closed on any untrusted WinGet path.
+        if install:
+            raise
+        return {**base, "status": "GDK_HOSTED_WINGET_UNTRUSTED_PROBE_ONLY",
+                "winget_available": False,
+                "winget_discovery_error": str(exc),
+                **_catalog_assessment("WINGET_UNTRUSTED", [])}
     if not install:
         catalog = (_probe_versions(winget) if probe_versions and winget is not None
                    else _catalog_assessment("NOT_QUERIED" if not probe_versions
