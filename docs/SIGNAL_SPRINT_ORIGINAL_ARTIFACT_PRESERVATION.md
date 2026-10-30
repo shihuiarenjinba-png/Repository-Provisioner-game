@@ -18,3 +18,33 @@ python signal_sprint_preserve_artifact.py --original-zip "C:\\path\\signal-sprin
 The tool validates the original ZIP, CRC, member set, provenance, and EXE against pinned SHA-256 constants, then copies **the original ZIP bytes**, without extraction/recompression or EXE rebuild. It uses exclusive creation, never overwrites a conflicting target, verifies the stored copy, and emits JSON. `PRESERVED_VERIFIED` is a successful first copy; `EXISTING_VERIFIED` is a safe idempotent rerun. An error is HOLD/CONFLICT, not success.
 
 Keep the original ZIP and JSON evidence together under owner control. The copy remains a `QA_UNSIGNED` EXE artifact; it is **not** a signed or certifiable GDK package. CAS, Package Version, reserved display name, retail GDK SDK, MSIXVC2 build, Windows QA, and Store submission remain separate gates. This tool does not access Partner Center, change Factory source, perform CAS, or edit the Windows-all-auto ledger.
+
+
+## Restoring from the rescued GitHub Actions wrapper (2026-10-31)
+
+The original **byte-identical** ZIP was recovered inside Actions artifact
+**12999968947** from [run 41105901884](https://github.com/shihuiarenjinba-png/AI-Game-Factory/actions/runs/41105901884).
+That outer Actions download ZIP is **not** the original ZIP and must never be
+passed directly to the GDK build gate. Its nested file
+`signal-sprint-exact-archive/signal-sprint-original-github-artifact-12706862577.zip`
+is the exact pinned original (SHA-256 `e48a0426595dc227988f12944921511a47d5c8feca8b063a161dd0dd61306412`).
+
+After downloading the rescued Actions artifact ZIP and preparing a durable
+owner-managed destination directory, run:
+
+```powershell
+python signal_sprint_rescue_wrapper.py --rescue-wrapper-zip "C:\path\downloaded-rescue-wrapper.zip" --destination-dir "D:\OwnerBackup\SignalSprint"
+```
+
+The helper reads the wrapper as one snapshot, rejects unexpected/duplicate/
+traversal/symlink members, checks wrapper CRC and the exact nested original ZIP
+SHA-256, compares all three extracted member bytes with the nested original,
+then delegates to `signal_sprint_preserve_artifact.preserve` for full
+provenance validation and exclusive, restart-safe preservation. It never
+rebuilds the executable, repacks the original ZIP, overwrites conflicting
+backups, performs CAS, runs the SDK, or accesses Partner Center.
+
+Successful statuses are `PRESERVED_VERIFIED` and `EXISTING_VERIFIED`;
+both mean only the local **copy** passed verification, not Store readiness.
+The rescued GitHub Actions artifact is temporary (90-day retention), and
+this helper has not been run against an owner-managed durable destination.
