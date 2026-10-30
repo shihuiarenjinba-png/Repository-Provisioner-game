@@ -15,7 +15,7 @@ import re
 import subprocess
 import sys
 
-from gdk_sdk_discovery import discover_makepkg
+from gdk_sdk_discovery import discover_makepkg, _regular_executable
 from package_identity_provisioner import ConflictError, HoldError, PINNED_SIGNAL_SPRINT_JOB
 
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -42,12 +42,15 @@ def _winget() -> Path | None:
         if not directory.is_absolute():
             continue
         candidate = directory / "winget.exe"
-        if not candidate.is_file():
+        # Match the GDK tool's fail-closed discovery: neither the executable
+        # nor any parent may be a symlink or Windows junction. Resolving a
+        # linked PATH entry could otherwise execute an unreviewed installer.
+        resolved = _regular_executable(candidate)
+        if resolved is None:
             continue
-        resolved = candidate.resolve()
         if root is not None and (resolved == root or root in resolved.parents):
             raise ConflictError("WinGet executable inside checkout is untrusted")
-        found.setdefault(str(resolved).casefold(), candidate)
+        found.setdefault(str(resolved).casefold(), resolved)
     if len(found) > 1:
         raise ConflictError("multiple WinGet executables found on PATH; refusing ambiguous installer")
     return next(iter(found.values())) if found else None
