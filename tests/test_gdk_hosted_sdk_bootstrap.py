@@ -237,6 +237,35 @@ class HostedBootstrapTests(unittest.TestCase):
                 with self.assertRaisesRegex(ConflictError, "checkout"):
                     bootstrap._winget()
 
+    def test_symlinked_winget_executable_rejected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            real = root / "actual-winget.exe"
+            real.write_bytes(b"unreviewed executable")
+            link = root / "winget.exe"
+            try:
+                link.symlink_to(real)
+            except (OSError, NotImplementedError):
+                self.skipTest("file symlink creation unavailable")
+            with mock.patch.dict(os.environ, {"PATH": temp, "GITHUB_WORKSPACE": ""}):
+                with self.assertRaisesRegex(ConflictError, "linked"):
+                    bootstrap._winget()
+
+    def test_symlinked_winget_parent_rejected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            actual = root / "actual"
+            actual.mkdir()
+            (actual / "winget.exe").write_bytes(b"unreviewed executable")
+            link = root / "linked"
+            try:
+                link.symlink_to(actual, target_is_directory=True)
+            except (OSError, NotImplementedError):
+                self.skipTest("directory symlink creation unavailable")
+            with mock.patch.dict(os.environ, {"PATH": str(link), "GITHUB_WORKSPACE": ""}):
+                with self.assertRaisesRegex(ConflictError, "linked"):
+                    bootstrap._winget()
+
     def test_cwd_winget_is_not_discovered(self):
         with tempfile.TemporaryDirectory() as temp:
             (Path(temp) / "winget.exe").write_bytes(b"fake current-dir executable")
