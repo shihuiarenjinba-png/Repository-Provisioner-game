@@ -74,10 +74,12 @@ class GdkIdentityContractTests(unittest.TestCase):
         package = {"sha256": "d" * 64, "signature_status": "NOTSIGNED"}
         writes = []
         branch_creates = []
+        source_reads = []
         cas_branch = "codex/game-signal-sprint-gdk-cas-" + SOURCE_SHA[:12]
 
         def api(endpoint, body=None, allow_missing=False):
             if endpoint.endswith("git/ref/heads/" + job.source_branch):
+                source_reads.append(endpoint)
                 return {"object": {"sha": SOURCE_SHA}}
             if endpoint.endswith("git/ref/heads/" + cas_branch):
                 return {"object": {"sha": SOURCE_SHA}} if branch_creates else None
@@ -104,6 +106,7 @@ class GdkIdentityContractTests(unittest.TestCase):
             job, config, official, package, apply=True)
         self.assertEqual(result["status"], "APPLIED")
         self.assertEqual(result["branch"], cas_branch)
+        self.assertEqual(len(source_reads), 2, "immutable source must be rechecked immediately before CAS")
         self.assertEqual(branch_creates, [{"ref": "refs/heads/" + cas_branch, "sha": SOURCE_SHA}])
         self.assertEqual(writes[0]["variables"]["input"]["branch"]["branchName"], cas_branch)
         self.assertEqual(writes[0]["variables"]["input"]["expectedHeadOid"], SOURCE_SHA)
