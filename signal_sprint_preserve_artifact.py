@@ -7,6 +7,7 @@ No GitHub, Partner Center, CAS, SDK, or Store operations occur.
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import json
 import os
@@ -64,6 +65,26 @@ def preserve(source: Path, destination_dir: Path) -> dict:
                 status = "PRESERVED_VERIFIED"
             except FileExistsError:
                 status = verify_existing()
+            except OSError as exc:
+                # exFAT/FAT and some synced folders cannot create hard links.
+                # Fall back to exclusive creation, never replacing a target.
+                unsupported = {errno.EXDEV, errno.EPERM, errno.EOPNOTSUPP, errno.ENOTSUP}
+                if exc.errno not in unsupported:
+                    raise
+                created = False
+                try:
+                    with target.open("xb") as output:
+                        created = True
+                        output.write(snapshot)
+                        output.flush()
+                        os.fsync(output.fileno())
+                    status = "PRESERVED_VERIFIED"
+                except FileExistsError:
+                    status = verify_existing()
+                except BaseException:
+                    if created:
+                        target.unlink(missing_ok=True)
+                    raise
         finally:
             if temporary is not None:
                 temporary.unlink(missing_ok=True)
