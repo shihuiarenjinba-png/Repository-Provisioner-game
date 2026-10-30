@@ -75,6 +75,62 @@ class GdkWindowsSdkRunnerTests(unittest.TestCase):
             self.assertFalse(self.evidence.exists())
             run.assert_not_called()
 
+    def test_nested_linked_evidence_ancestor_rejected_before_check_only(self):
+        # The immediate log parent is a normal directory, but its grandparent
+        # redirects to another tree. A leaf-only check would miss this.
+        real = self.root / "real-evidence"
+        (real / "nested").mkdir(parents=True)
+        linked = self.root / "linked-evidence"
+        try:
+            linked.symlink_to(real, target_is_directory=True)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f"directory symlinks unavailable: {exc}")
+        a, b = self.patches()
+        with a, b, mock.patch("gdk_windows_sdk_runner.subprocess.run") as run:
+            with self.assertRaisesRegex(ConflictError, "linked path"):
+                run_windows_pack(**{**self.args,
+                                    "validation_log": linked / "nested" / "sdk.log"})
+            run.assert_not_called()
+        self.assertFalse(self.evidence.exists())
+
+    def test_sdk_output_parent_swap_after_gate_rejected_before_execute(self):
+        # A different process could redirect the SDK output parent after the
+        # pack-plan gate, while the leaf itself remains a normal directory.
+        parent = self.root / "sdk-parent"
+        parent.mkdir()
+        output = parent / "output"
+        output.mkdir()
+        probe = self.root / "symlink-probe"
+        try:
+            probe.symlink_to(parent, target_is_directory=True)
+            probe.unlink()
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f"directory symlinks unavailable: {exc}")
+        self.plan["sdk_command_argv_not_executed"][7] = str(output)
+        canonical = json.dumps(self.plan, sort_keys=True, separators=(",", ":"),
+                               ensure_ascii=False, allow_nan=False).encode()
+        self.handoff["sdk_pack_plan_sha256"] = sha(canonical)
+        self.anchor.write_text(json.dumps(self.handoff))
+        self.plan_path.write_text(json.dumps(self.plan))
+        self.args["trusted_handoff_sha256"] = sha(self.anchor.read_bytes())
+        self.args["output_dir"] = output
+
+        def redirect_after_gate():
+            relocated = self.root / "sdk-parent-real"
+            parent.rename(relocated)
+            parent.symlink_to(relocated, target_is_directory=True)
+            return self.fake_makepkg
+
+        a, b = self.patches()
+        with a, b, mock.patch("gdk_windows_sdk_runner._sdk_executable",
+                              side_effect=redirect_after_gate), \
+             mock.patch("gdk_windows_sdk_runner.subprocess.run") as run:
+            with self.assertRaisesRegex(ConflictError, "linked path"):
+                run_windows_pack(**{**self.args, "execute": True})
+            run.assert_not_called()
+        self.assertFalse(self.log.exists())
+        self.assertFalse(self.evidence.exists())
+
     def test_wrong_independent_anchor_rejected(self):
         with self.assertRaisesRegex(ConflictError, "independent handoff SHA"):
             run_windows_pack(**{**self.args, "trusted_handoff_sha256": "0" * 64})
