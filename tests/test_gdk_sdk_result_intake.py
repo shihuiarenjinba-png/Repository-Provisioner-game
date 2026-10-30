@@ -206,6 +206,36 @@ class GdkSdkResultIntakeTests(unittest.TestCase):
         with self.assertRaisesRegex(ConflictError, "escapes|linked"):
             self.check()
 
+    def test_symlinked_output_parent_rejected(self):
+        alias = self.output.parent / "output-alias"
+        try:
+            alias.symlink_to(self.output.parent, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("directory symlink creation unavailable")
+        self.output = alias / "output"
+        with self.assertRaisesRegex(ConflictError, "GDK output contains symlink or junction"):
+            self.check()
+
+    def test_symlinked_validation_log_parent_rejected(self):
+        alias = self.log_path.parent / "log-alias"
+        try:
+            alias.symlink_to(self.log_path.parent, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("directory symlink creation unavailable")
+        self.log_path = alias / "validation.log"
+        with self.assertRaisesRegex(ConflictError, "GDK validation log contains symlink or junction"):
+            self.check()
+
+    def test_symlinked_plan_parent_rejected(self):
+        alias = self.plan_path.parent / "plan-alias"
+        try:
+            alias.symlink_to(self.plan_path.parent, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("directory symlink creation unavailable")
+        self.plan_path = alias / "plan.json"
+        with self.assertRaisesRegex(ConflictError, "GDK plan contains symlink or junction"):
+            self.check()
+
     def test_plan_cannot_claim_sdk_success(self):
         self.plan["real_msixvc_built"] = True
         with self.assertRaisesRegex(ConflictError, "real_msixvc_built"):
