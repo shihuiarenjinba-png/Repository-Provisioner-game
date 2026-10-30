@@ -45,3 +45,15 @@ The returned JSON is **not** a Windows-all-auto QA receipt and is **not** a real
 - Factory's separate GDK post-CAS gate (stacked Draft PR #13/#14) must also pass on the **same** dedicated build checkout, using branch format `codex/game-signal-sprint-gdk-build-*`. The generic MSIX workflow is not the GDK build path.
 - No real GDK MSIXVC/MSIXVC2, install test, GUI QA or Store approval has been demonstrated.
 - CI green validates this contract, not product E2E. Both Factory and Provisioner check-only gates must pass independently on the same dedicated build checkout; neither PASS is evidence of a real SDK package.
+
+## Immutable original EXE static PE audit (2026-10-30)
+
+Run the independent read-only audit on the recovered original ZIP before preparing GDK staging content:
+
+    python gdk_pe_static_audit.py --original-zip /path/to/signal-sprint-original-github-artifact-12706862577.zip
+
+The tool first re-verifies exact original ZIP/EXE hashes, then checks the PE signature, PE32+ x64 machine, Windows GUI subsystem, original unsigned certificate-table state, section boundaries and direct-import DLL names. It re-verifies the original ZIP at the end. PASS is not Windows runtime QA, Authenticode verification, an SDK check, a package, or proof that dynamically loaded DLLs are absent.
+
+The independently recovered original EXE passed the static audit on 2026-10-30. Direct imports: ADVAPI32.DLL, COMCTL32.DLL, GDI32.DLL, KERNEL32.DLL, USER32.DLL. No direct VCRUNTIME, MSVCP, UCRTBASE or API-MS-WIN-CRT imports were observed. Dynamic loads and clean-Windows compatibility still require QA. The pinned original ZIP and EXE were not changed or rebuilt.
+
+Microsoft's September 15, 2026 MSIXVC2 packaging guide requires October 2026 GDK or later for GA MSIXVC2 and names the managed tool makepkg.exe. The April 2026 SDK's MSIXVC2 remains preview-only for public certification. Official guidance: https://learn.microsoft.com/en-us/gaming/gdk/docs/features/common/packaging/overviews/packaging-getting-started-for-pc-msixvc2 . No SDK version or SHA is inferred; an independently verified installed tool is still required.
