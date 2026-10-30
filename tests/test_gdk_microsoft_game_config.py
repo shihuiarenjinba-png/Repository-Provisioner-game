@@ -126,6 +126,40 @@ class MicrosoftGameConfigTests(unittest.TestCase):
         b = bytearray(p.read_bytes()); b[25] ^= 1; p.write_bytes(b)
         with self.assertRaisesRegex(ConflictError, "CRC"): self.build()
 
+    def test_png_missing_idat_rejected_even_with_valid_crc(self):
+        p = self.root / "Logo.png"
+        p.write_bytes(cfg.PNG_SIGNATURE + chunk(
+            b"IHDR", struct.pack(">IIBBBBB", 150, 150, 8, 6, 0, 0, 0)
+        ) + chunk(b"IEND", b""))
+        with self.assertRaisesRegex(ConflictError, "image data"):
+            self.build()
+
+    def test_png_corrupt_deflate_rejected_even_with_valid_crc(self):
+        p = self.root / "SmallLogo.png"
+        p.write_bytes(cfg.PNG_SIGNATURE + chunk(
+            b"IHDR", struct.pack(">IIBBBBB", 44, 44, 8, 6, 0, 0, 0)
+        ) + chunk(b"IDAT", b"not a zlib stream") + chunk(b"IEND", b""))
+        with self.assertRaisesRegex(ConflictError, "compressed image"):
+            self.build()
+
+    def test_png_invalid_filter_rejected_even_with_valid_crc(self):
+        p = self.root / "SmallLogo.png"
+        raw = b"".join(b"\\x05" + b"\\0" * (44 * 4) for _ in range(44))
+        p.write_bytes(cfg.PNG_SIGNATURE + chunk(
+            b"IHDR", struct.pack(">IIBBBBB", 44, 44, 8, 6, 0, 0, 0)
+        ) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+        with self.assertRaisesRegex(ConflictError, "scanline filter"):
+            self.build()
+
+    def test_png_short_decompressed_image_rejected(self):
+        p = self.root / "SmallLogo.png"
+        raw = b"\\0" * 100
+        p.write_bytes(cfg.PNG_SIGNATURE + chunk(
+            b"IHDR", struct.pack(">IIBBBBB", 44, 44, 8, 6, 0, 0, 0)
+        ) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+        with self.assertRaisesRegex(ConflictError, "decompressed scanlines"):
+            self.build()
+
     def test_symlink_exe_rejected(self):
         (self.root / "SignalSprint.exe").unlink()
         (self.root / "real.exe").write_bytes(self.exe)
