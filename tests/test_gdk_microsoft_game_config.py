@@ -139,7 +139,7 @@ class MicrosoftGameConfigTests(unittest.TestCase):
         p = self.root / "SmallLogo.png"
         original = p.read_bytes()
         ihdr_end = len(cfg.PNG_SIGNATURE) + 12 + 13
-        p.write_bytes(original[:ihdr_end] + chunk(b"tEXt", b"Note\\x00ok")
+        p.write_bytes(original[:ihdr_end] + chunk(b"tEXt", b"Note\x00ok")
                       + original[ihdr_end:])
         self.assertEqual(self.build()["status"], "GDK_CONFIG_CHECK_ONLY")
 
@@ -154,20 +154,20 @@ class MicrosoftGameConfigTests(unittest.TestCase):
 
     def test_png_grayscale_palette_rejected(self):
         p = self.root / "SmallLogo.png"
-        raw = b"".join(b"\\x00" + b"\\x00" * 44 for _ in range(44))
+        raw = b"".join(b"\x00" + b"\x00" * 44 for _ in range(44))
         p.write_bytes(cfg.PNG_SIGNATURE + chunk(
             b"IHDR", struct.pack(">IIBBBBB", 44, 44, 8, 0, 0, 0, 0)
-        ) + chunk(b"PLTE", b"\\x00\\x00\\x00")
+        ) + chunk(b"PLTE", b"\x00\x00\x00")
             + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
         with self.assertRaisesRegex(ConflictError, "invalid PNG palette"):
             self.build()
 
     def test_png_indexed_palette_over_bit_depth_rejected(self):
         p = self.root / "SmallLogo.png"
-        raw = b"".join(b"\\x00" + b"\\x00" * 6 for _ in range(44))
+        raw = b"".join(b"\x00" + b"\x00" * 6 for _ in range(44))
         p.write_bytes(cfg.PNG_SIGNATURE + chunk(
             b"IHDR", struct.pack(">IIBBBBB", 44, 44, 1, 3, 0, 0, 0)
-        ) + chunk(b"PLTE", b"\\x00\\x00\\x00" * 3)
+        ) + chunk(b"PLTE", b"\x00\x00\x00" * 3)
             + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
         with self.assertRaisesRegex(ConflictError, "invalid PNG palette"):
             self.build()
