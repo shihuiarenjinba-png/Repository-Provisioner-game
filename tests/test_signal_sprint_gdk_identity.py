@@ -73,10 +73,17 @@ class GdkIdentityContractTests(unittest.TestCase):
         official = gdk_identity()
         package = {"sha256": "d" * 64, "signature_status": "NOTSIGNED"}
         writes = []
+        branch_creates = []
+        cas_branch = "codex/game-signal-sprint-gdk-cas-" + SOURCE_SHA[:12]
 
         def api(endpoint, body=None, allow_missing=False):
-            if "git/ref/heads/" in endpoint:
+            if endpoint.endswith("git/ref/heads/" + job.source_branch):
                 return {"object": {"sha": SOURCE_SHA}}
+            if endpoint.endswith("git/ref/heads/" + cas_branch):
+                return {"object": {"sha": SOURCE_SHA}} if branch_creates else None
+            if endpoint.endswith("git/refs"):
+                branch_creates.append(body)
+                return {"ref": "refs/heads/" + cas_branch, "object": {"sha": SOURCE_SHA}}
             if "/manifest.json" in endpoint:
                 value = {"slug": "signal-sprint", "kind": "game"}
                 return {"encoding": "base64",
@@ -96,6 +103,10 @@ class GdkIdentityContractTests(unittest.TestCase):
         result = GitHubReturnClient(api).return_identity(
             job, config, official, package, apply=True)
         self.assertEqual(result["status"], "APPLIED")
+        self.assertEqual(result["branch"], cas_branch)
+        self.assertEqual(branch_creates, [{"ref": "refs/heads/" + cas_branch, "sha": SOURCE_SHA}])
+        self.assertEqual(writes[0]["variables"]["input"]["branch"]["branchName"], cas_branch)
+        self.assertEqual(writes[0]["variables"]["input"]["expectedHeadOid"], SOURCE_SHA)
         encoded = writes[0]["variables"]["input"]["fileChanges"]["additions"][0]["contents"]
         approved = json.loads(base64.b64decode(encoded))
         self.assertEqual(approved["source"], "partner_center_user_provided")
