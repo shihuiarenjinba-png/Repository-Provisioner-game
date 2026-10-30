@@ -66,11 +66,23 @@ def _reject_redirected_path(path: Path, label: str) -> None:
             raise HoldError(label + " path cannot be inspected") from exc
 
 
-def _read_json(path: Path, label: str) -> dict:
-    if path.is_symlink() or not path.is_file():
-        raise HoldError(label + " missing or linked")
-    if not 0 < path.stat().st_size <= MAX_JSON:
-        raise ConflictError(label + " size invalid")
+def _read_json(path: Path, label: str) -> tuple[dict, str]:
+    """Read bounded JSON from one stable regular file and pin its byte digest."""
+    _reject_redirected_path(path, label)
+    before = path.lstat()
+    if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= MAX_JSON:
+        raise ConflictError(label + " size invalid or not a regular file")
+    with path.open("rb") as stream:
+        opened = os.fstat(stream.fileno())
+        if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+            raise ConflictError(label + " changed before open")
+        raw = stream.read(MAX_JSON + 1)
+    after = path.lstat()
+    if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+        after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
+    ) or len(raw) != before.st_size:
+        raise ConflictError(label + " changed during read")
+    _reject_redirected_path(path, label)
 
     def unique(pairs):
         result = {}
@@ -81,13 +93,13 @@ def _read_json(path: Path, label: str) -> dict:
         return result
 
     try:
-        value = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique,
+        value = json.loads(raw.decode("utf-8"), object_pairs_hook=unique,
                            parse_constant=lambda v: (_ for _ in ()).throw(ValueError(v)))
     except (UnicodeError, json.JSONDecodeError, ValueError) as exc:
         raise ConflictError(label + " invalid strict JSON") from exc
     if type(value) is not dict:
         raise ConflictError(label + " must be object")
-    return value
+    return value, hashlib.sha256(raw).hexdigest()
 
 
 def _expect(obj: dict, key: str, expected):
@@ -130,8 +142,8 @@ def intake(plan_path: Path, evidence_path: Path, package_dir: Path,
         (validation_log, "GDK validation log"),
     ):
         _reject_redirected_path(path, label)
-    plan = _read_json(plan_path, "GDK plan")
-    result = _read_json(evidence_path, "GDK SDK result")
+    plan, plan_sha = _read_json(plan_path, "GDK plan")
+    result, evidence_sha = _read_json(evidence_path, "GDK SDK result")
     if set(plan) != PLAN_FIELDS or set(result) != RESULT_FIELDS:
         raise ConflictError("GDK plan/result schema unexpected")
     for obj in (plan, result):
@@ -230,6 +242,17 @@ def intake(plan_path: Path, evidence_path: Path, package_dir: Path,
         raise ConflictError("GDK package bytes mismatch")
     if log_sha != result["validation_log_sha256"]:
         raise ConflictError("GDK validation log bytes mismatch")
+    # Large package hashing can take minutes. Reject evidence or sidecar
+    # mutation after the first read, not just a changed output filename.
+    for path, expected, label in (
+        (plan_path, plan_sha, "GDK plan"),
+        (evidence_path, evidence_sha, "GDK SDK result"),
+    ):
+        if _hash_file(path, MAX_JSON, label)[0] != expected:
+            raise ConflictError(label + " changed during intake")
+    for name, digest in inventory.items():
+        if name != filename and _hash_file(directory / name, MAX_SIDECAR, "GDK SDK sidecar")[0] != digest:
+            raise ConflictError("GDK SDK sidecar changed during intake")
     if {entry.name for entry in directory.iterdir()} != set(inventory):
         raise ConflictError("GDK output inventory changed during intake")
     for path, label in (
