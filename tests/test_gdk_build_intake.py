@@ -248,7 +248,7 @@ class GdkBuildIntakeTests(unittest.TestCase):
         original = self.fake_git
 
         def dirty(repo, *args):
-            if args == ("status", "--porcelain"):
+            if args == ("status", "--porcelain", "--untracked-files=all"):
                 return b"?? untracked-file"
             return original(repo, *args)
 
