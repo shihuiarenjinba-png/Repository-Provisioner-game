@@ -78,8 +78,17 @@ def verify_cas_checkout(repo: Path, cas_sha: str, build_sha: str) -> dict:
     branch = _git(repo, "symbolic-ref", "--short", "HEAD").decode()
     if not BUILD_BRANCH.fullmatch(branch):
         raise ConflictError("GDK build branch name violates dedicated Factory contract")
-    if _git(repo, "status", "--porcelain"):
+    if _git(repo, "status", "--porcelain", "--untracked-files=all"):
         raise ConflictError("GDK build checkout is dirty")
+    # The declared CAS must still be the HEAD of the dedicated Identity-only
+    # return branch. A locally fabricated commit with the right parent and
+    # payload is not evidence that the reviewed CAS return actually landed.
+    cas_ref = "refs/heads/codex/game-signal-sprint-gdk-cas-" + source[:12]
+    if _git(repo, "rev-parse", cas_ref).decode() != cas_sha:
+        raise ConflictError("GDK dedicated CAS branch does not match declared CAS SHA")
+    build_ref = "refs/heads/" + branch
+    if _git(repo, "rev-parse", build_ref).decode() != build_sha:
+        raise ConflictError("GDK dedicated build branch moved before verification")
     # CAS must have exactly one parent; a merge with source as first parent
     # is not an atomic Identity-only CAS.
     if _git(repo, "rev-list", "--parents", "-n", "1", cas_sha).decode().split() != [cas_sha, source]:
@@ -128,6 +137,18 @@ def verify_cas_checkout(repo: Path, cas_sha: str, build_sha: str) -> dict:
         for path in changed.decode("utf-8").splitlines():
             if path.startswith("products/") or path == APPROVED_PATH:
                 raise ConflictError("GDK post-CAS product change in history")
+    # Re-read all three refs after the expensive ancestry/content checks. A
+    # branch update during verification must not produce a stale PASS receipt.
+    if _git(repo, "rev-parse", source_ref).decode() != source:
+        raise ConflictError("GDK immutable source branch moved during build verification")
+    if _git(repo, "rev-parse", cas_ref).decode() != cas_sha:
+        raise ConflictError("GDK dedicated CAS branch moved during build verification")
+    if (_git(repo, "rev-parse", build_ref).decode() != build_sha
+            or _git(repo, "rev-parse", "HEAD").decode() != build_sha
+            or _git(repo, "symbolic-ref", "--short", "HEAD").decode() != branch):
+        raise ConflictError("GDK dedicated build branch moved during verification")
+    if _git(repo, "status", "--porcelain", "--untracked-files=all"):
+        raise ConflictError("GDK build checkout changed during verification")
     return approved
 
 
