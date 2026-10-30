@@ -99,6 +99,12 @@ def verify_cas_checkout(repo: Path, cas_sha: str, build_sha: str) -> dict:
     changed = _git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", cas_sha)
     if changed.decode("utf-8") != APPROVED_PATH:
         raise ConflictError("GDK CAS commit changed files outside approved Identity")
+    # Compare Git blob identities, not only parsed JSON. Reformatting or
+    # changing trailing whitespace must not silently replace reviewed bytes.
+    cas_blob = _git(repo, "rev-parse", cas_sha + ":" + APPROVED_PATH)
+    build_blob = _git(repo, "rev-parse", build_sha + ":" + APPROVED_PATH)
+    if cas_blob != build_blob:
+        raise ConflictError("GDK build HEAD changed approved CAS Identity bytes")
     approved_bytes = _git(repo, "show", cas_sha + ":" + APPROVED_PATH)
     approved = _json(approved_bytes)
     if _json(_git(repo, "show", build_sha + ":" + APPROVED_PATH)) != approved:
