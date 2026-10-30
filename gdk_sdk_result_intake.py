@@ -66,7 +66,7 @@ def _reject_redirected_path(path: Path, label: str) -> None:
             raise HoldError(label + " path cannot be inspected") from exc
 
 
-def _read_json(path: Path, label: str) -> tuple[dict, str]:
+def _read_json(path: Path, label: str, *, with_digest: bool = False):
     """Read bounded JSON from one stable regular file and pin its byte digest."""
     _reject_redirected_path(path, label)
     before = path.lstat()
@@ -99,7 +99,8 @@ def _read_json(path: Path, label: str) -> tuple[dict, str]:
         raise ConflictError(label + " invalid strict JSON") from exc
     if type(value) is not dict:
         raise ConflictError(label + " must be object")
-    return value, hashlib.sha256(raw).hexdigest()
+    # Other GDK modules import _read_json and expect a dict; retain that API.
+    return (value, hashlib.sha256(raw).hexdigest()) if with_digest else value
 
 
 def _expect(obj: dict, key: str, expected):
@@ -142,8 +143,8 @@ def intake(plan_path: Path, evidence_path: Path, package_dir: Path,
         (validation_log, "GDK validation log"),
     ):
         _reject_redirected_path(path, label)
-    plan, plan_sha = _read_json(plan_path, "GDK plan")
-    result, evidence_sha = _read_json(evidence_path, "GDK SDK result")
+    plan, plan_sha = _read_json(plan_path, "GDK plan", with_digest=True)
+    result, evidence_sha = _read_json(evidence_path, "GDK SDK result", with_digest=True)
     if set(plan) != PLAN_FIELDS or set(result) != RESULT_FIELDS:
         raise ConflictError("GDK plan/result schema unexpected")
     for obj in (plan, result):
