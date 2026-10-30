@@ -801,6 +801,13 @@ class GitHubReturnClient:
                         "evidence_url": official["official_evidence_url"],
                         "verified_at": official["verified_at"]}
         content = json.dumps(approved, ensure_ascii=False, indent=2) + "\n"
+        if gdk_return:
+            # The source is a separate immutable ref; recheck after reading
+            # evidence and creating the CAS branch, immediately before write.
+            source_latest = self.api(base + "git/ref/heads/" + job.source_branch)
+            if (not isinstance(source_latest, dict)
+                    or source_latest.get("object", {}).get("sha") != job.source_sha):
+                raise ConflictError("Immutable Signal Sprint source branch moved before CAS write")
         body = {"query": self.MUTATION, "variables": {"input": {
             "branch": {"repositoryNameWithOwner": config.source_repository, "branchName": cas_branch},
             "message": {"headline": "store: return verified Partner Center identity for " + job.slug},
