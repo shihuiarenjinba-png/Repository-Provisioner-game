@@ -50,6 +50,22 @@ RESULT_FIELDS = {
 }
 
 
+def _reject_redirected_path(path: Path, label: str) -> None:
+    """Reject linked ancestors, not only a linked leaf, for SDK evidence.
+
+    A symlinked parent can redirect an apparently ordinary package/log/JSON
+    file outside the reviewed GDK output location. Recheck after byte reads
+    as well; this does not replace trusted storage against concurrent races.
+    """
+    for component in (path, *path.parents):
+        try:
+            if (component.is_symlink()
+                    or getattr(component, "is_junction", lambda: False)()):
+                raise ConflictError(label + " contains symlink or junction")
+        except (OSError, RuntimeError) as exc:
+            raise HoldError(label + " path cannot be inspected") from exc
+
+
 def _read_json(path: Path, label: str) -> dict:
     if path.is_symlink() or not path.is_file():
         raise HoldError(label + " missing or linked")
@@ -107,6 +123,13 @@ def _hash_file(path: Path, maximum: int, label: str) -> tuple[str, int]:
 
 def intake(plan_path: Path, evidence_path: Path, package_dir: Path,
            validation_log: Path) -> dict:
+    for path, label in (
+        (plan_path, "GDK plan"),
+        (evidence_path, "GDK SDK result"),
+        (package_dir, "GDK output"),
+        (validation_log, "GDK validation log"),
+    ):
+        _reject_redirected_path(path, label)
     plan = _read_json(plan_path, "GDK plan")
     result = _read_json(evidence_path, "GDK SDK result")
     if set(plan) != PLAN_FIELDS or set(result) != RESULT_FIELDS:
@@ -209,6 +232,13 @@ def intake(plan_path: Path, evidence_path: Path, package_dir: Path,
         raise ConflictError("GDK validation log bytes mismatch")
     if {entry.name for entry in directory.iterdir()} != set(inventory):
         raise ConflictError("GDK output inventory changed during intake")
+    for path, label in (
+        (plan_path, "GDK plan"),
+        (evidence_path, "GDK SDK result"),
+        (package_dir, "GDK output"),
+        (validation_log, "GDK validation log"),
+    ):
+        _reject_redirected_path(path, label)
     return {
         "schema_version": 1,
         "status": "GDK_PACKAGE_BYTES_AND_SDK_RECEIPT_CHECK_PASS",
