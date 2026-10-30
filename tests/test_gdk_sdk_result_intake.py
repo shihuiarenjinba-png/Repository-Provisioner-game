@@ -9,6 +9,8 @@ from unittest.mock import patch
 import gdk_sdk_result_intake as sdk_intake
 
 from gdk_sdk_result_intake import intake
+from gdk_build_intake import EXE_SHA256
+from gdk_msixvc2_preflight import MAX_FILE_BYTES
 from package_identity_provisioner import ConflictError, PINNED_SIGNAL_SPRINT_JOB
 
 
@@ -39,8 +41,10 @@ class GdkSdkResultIntakeTests(unittest.TestCase):
             "cas_commit_sha": "b" * 40, "factory_head_sha": "c" * 40,
             "package_version": "1.0.1.0", "reviewed_display_name": "Signal Sprint",
             "verified_receipt_sha256": "d" * 64,
-            "staging_files_sha256": {"SignalSprint.exe": "e" * 64,
-                                      **{f"asset{i}.png": "f" * 64 for i in range(5)}},
+            "staging_files_sha256": {
+                name: EXE_SHA256 if name == "SignalSprint.exe" else "f" * 64
+                for name in MAX_FILE_BYTES
+            },
             "sdk_command_argv_not_executed": argv,
             "sdk_required": "October 2026 GDK or later with managed makepkg.exe",
             "msixvc2_preview_public_certification_blocked": False,
@@ -145,6 +149,20 @@ class GdkSdkResultIntakeTests(unittest.TestCase):
         with patch.object(sdk_intake, "_hash_file", side_effect=rewrite_after_package):
             with self.assertRaisesRegex(ConflictError, "GDK SDK sidecar changed during intake"):
                 intake(self.plan_path, self.evidence_path, self.output, self.log_path)
+
+    def test_unreviewed_staging_filename_rejected(self):
+        # A plan and SDK result can agree on an unreviewed filename; intake
+        # must still reject it independently of the earlier pack-plan gate.
+        hashes = self.plan["staging_files_sha256"]
+        hashes["unreviewed.dat"] = hashes.pop("MicrosoftGame.config")
+        with self.assertRaisesRegex(ConflictError, "staging hashes"):
+            self.check()
+
+    def test_substituted_executable_digest_rejected(self):
+        # Both receipts still agree, but the immutable Factory EXE pin differs.
+        self.plan["staging_files_sha256"]["SignalSprint.exe"] = "0" * 64
+        with self.assertRaisesRegex(ConflictError, "immutable executable"):
+            self.check()
 
     def test_wrong_source_rejected(self):
         self.evidence["source_sha"] = "f" * 40
