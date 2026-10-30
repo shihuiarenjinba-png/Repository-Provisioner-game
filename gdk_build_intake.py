@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 from pathlib import Path
 import re
@@ -161,10 +162,13 @@ def verify_cas_checkout(repo: Path, cas_sha: str, build_sha: str) -> dict:
 def inspect_pinned_artifact(path: Path) -> dict:
     if (path.is_symlink() or not path.is_file() or not 0 < path.stat().st_size < 100_000_000):
         raise HoldError("Pinned GDK EXE artifact missing, linked or oversized")
-    if _sha256(path.read_bytes()) != ARTIFACT_SHA256:
+    # Hash and parse one immutable in-memory snapshot. Opening the path again
+    # after the first digest could otherwise consume a different ZIP.
+    snapshot = path.read_bytes()
+    if _sha256(snapshot) != ARTIFACT_SHA256:
         raise ConflictError("Pinned GDK artifact ZIP bytes changed")
     try:
-        with zipfile.ZipFile(path) as archive:
+        with zipfile.ZipFile(io.BytesIO(snapshot)) as archive:
             members = archive.infolist()
             if {m.filename for m in members} != {
                     "SignalSprint.exe", "provenance.json", "provisioner-request.json"} or len(members) != 3:
@@ -180,6 +184,14 @@ def inspect_pinned_artifact(path: Path) -> dict:
             request = _json(archive.read("provisioner-request.json"))
     except (zipfile.BadZipFile, OSError, RuntimeError, EOFError) as exc:
         raise ConflictError("Pinned GDK artifact is invalid") from exc
+    # The snapshot is trustworthy, but downstream stages also receive the
+    # path. Reject a swap during inspection instead of returning a stale PASS.
+    try:
+        if (path.is_symlink() or not path.is_file()
+                or _sha256(path.read_bytes()) != ARTIFACT_SHA256):
+            raise ConflictError("Pinned GDK artifact changed during verification")
+    except OSError as exc:
+        raise HoldError("Pinned GDK artifact unavailable during verification") from exc
     if _sha256(exe) != EXE_SHA256:
         raise ConflictError("Pinned GDK EXE SHA changed")
     for record in (provenance, request):
