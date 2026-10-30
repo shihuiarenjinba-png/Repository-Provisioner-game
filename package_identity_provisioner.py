@@ -730,19 +730,36 @@ class GitHubReturnClient:
                         package: dict[str, Any], apply: bool) -> dict[str, Any]:
         target_path = f"products/{job.slug}/store/approved-identity.json"
         base = f"repos/{config.source_repository}/"
-        proposal = {"status": "NOT_APPLIED", "repository": config.source_repository, "branch": job.source_branch,
+        gdk_return = official.get("identity_source") == GDK_USER_IDENTITY_SOURCE
+        # GDK CAS is a dedicated branch. The original Factory source branch
+        # must remain pinned forever; the post-CAS build uses another branch.
+        cas_branch = ("codex/game-signal-sprint-gdk-cas-" + job.source_sha[:12]
+                      if gdk_return else job.source_branch)
+        proposal = {"status": "NOT_APPLIED", "repository": config.source_repository, "branch": cas_branch,
                     "path": target_path, "commit_sha": None, "commit_url": None}
         if not apply:
             return proposal
-        ref = self.api(base + "git/ref/heads/" + job.source_branch)
-        head_sha = ref.get("object", {}).get("sha") if isinstance(ref, dict) else None
-        if not isinstance(head_sha, str) or not SHA40.fullmatch(head_sha):
-            raise RetryableError("Factory HEAD could not be verified before identity return")
+        source_ref = self.api(base + "git/ref/heads/" + job.source_branch)
+        source_head = source_ref.get("object", {}).get("sha") if isinstance(source_ref, dict) else None
+        if not isinstance(source_head, str) or not SHA40.fullmatch(source_head):
+            raise RetryableError("Factory source HEAD could not be verified")
+        if gdk_return and source_head != job.source_sha:
+            raise ConflictError("Immutable Signal Sprint source branch moved; refusing GDK CAS")
         self._verify_product(base, job, config)
-        # Bind the GDK retry read to the observed commit, not a moving branch
-        # ref. A later branch update must never turn a matching Identity blob
-        # into an apparently successful CAS resume.
-        gdk_return = official.get("identity_source") == GDK_USER_IDENTITY_SOURCE
+        if gdk_return:
+            cas_ref = self.api(base + "git/ref/heads/" + cas_branch, allow_missing=True)
+            if cas_ref is None:
+                # An interrupted first attempt may leave this branch at the
+                # pinned source SHA. The next invocation can resume safely.
+                self.api(base + "git/refs", body={
+                    "ref": "refs/heads/" + cas_branch, "sha": job.source_sha})
+                cas_ref = self.api(base + "git/ref/heads/" + cas_branch)
+            head_sha = cas_ref.get("object", {}).get("sha") if isinstance(cas_ref, dict) else None
+        else:
+            head_sha = source_head
+        if not isinstance(head_sha, str) or not SHA40.fullmatch(head_sha):
+            raise RetryableError("Factory CAS HEAD could not be verified")
+        # Bind the GDK retry read to the observed CAS commit, not a moving ref.
         evidence_ref = head_sha if gdk_return else job.source_branch
         existing = self.api(base + "contents/" + target_path + "?ref=" + quote(evidence_ref, safe=""), allow_missing=True)
         if existing is not None:
@@ -752,11 +769,11 @@ class GitHubReturnClient:
                 # the immutable source, adding only approved-identity.json.
                 # A matching file alone is insufficient provenance.
                 if gdk_return:
-                    self._verify_existing_gdk_cas(base, job, head_sha, target_path)
+                    self._verify_existing_gdk_cas(base, job, head_sha, target_path, cas_branch)
                 return {**proposal, "status": "EXISTING_VERIFIED", "commit_sha": head_sha}
             raise ConflictError("approved-identity.json already exists and will not be overwritten")
         if head_sha != job.source_sha:
-            raise ConflictError("Factory HEAD changed before identity return")
+            raise ConflictError("Factory CAS branch HEAD changed before identity return")
         common = {"schema_version": SCHEMA_VERSION, "reviewed": True,
                   "request_id": job.request_id, "product_type": job.product_type,
                   "slug": job.slug, "source_factory": job.source_factory,
@@ -785,7 +802,7 @@ class GitHubReturnClient:
                         "verified_at": official["verified_at"]}
         content = json.dumps(approved, ensure_ascii=False, indent=2) + "\n"
         body = {"query": self.MUTATION, "variables": {"input": {
-            "branch": {"repositoryNameWithOwner": config.source_repository, "branchName": job.source_branch},
+            "branch": {"repositoryNameWithOwner": config.source_repository, "branchName": cas_branch},
             "message": {"headline": "store: return verified Partner Center identity for " + job.slug},
             "expectedHeadOid": job.source_sha,
             "fileChanges": {"additions": [{"path": target_path,
@@ -799,7 +816,7 @@ class GitHubReturnClient:
         return {**proposal, "status": "APPLIED", "commit_sha": commit["oid"], "commit_url": commit.get("url")}
 
     def _verify_existing_gdk_cas(self, base: str, job: Job,
-                                 head_sha: str, target_path: str) -> None:
+                                 head_sha: str, target_path: str, cas_branch: str) -> None:
         """Only the original single-file CAS commit may be resumed as verified.
 
         The post-CAS build belongs on a separate branch. Never bless an
@@ -822,10 +839,14 @@ class GitHubReturnClient:
                 or files[0].get("filename") != target_path
                 or files[0].get("status") != "added"):
             raise ConflictError("GDK CAS commit must add only approved Identity")
-        latest = self.api(base + "git/ref/heads/" + job.source_branch)
+        latest = self.api(base + "git/ref/heads/" + cas_branch)
         if (not isinstance(latest, dict)
                 or latest.get("object", {}).get("sha") != head_sha):
-            raise ConflictError("GDK source branch moved during CAS resume verification")
+            raise ConflictError("GDK CAS branch moved during CAS resume verification")
+        source_ref = self.api(base + "git/ref/heads/" + job.source_branch)
+        if (not isinstance(source_ref, dict)
+                or source_ref.get("object", {}).get("sha") != job.source_sha):
+            raise ConflictError("Immutable Signal Sprint source branch moved during CAS resume")
 
     def _verify_product(self, base: str, job: Job, config: ProductConfig) -> None:
         branch = quote(job.source_branch, safe="")
@@ -1219,7 +1240,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="Operator export from an authenticated Partner Center session; never source-controlled")
     parser.add_argument("--resume-result", type=Path,
                         help="Prior pre-Identity Provisioner result whose exact local EXE will be re-inspected")
-    parser.add_argument("--apply", action="store_true", help="Atomically write to the configured Factory work branch")
+    parser.add_argument("--apply", action="store_true", help="Atomically return Identity (GDK: dedicated CAS branch; original source remains immutable)")
     args = parser.parse_args(argv)
     started = utc_now()
     try:
