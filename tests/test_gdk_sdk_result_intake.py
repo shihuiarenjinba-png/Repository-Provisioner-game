@@ -325,5 +325,35 @@ class GdkSdkResultIntakeTests(unittest.TestCase):
             self.check()
 
 
+    def test_shared_hash_file_accepts_regular_trusted_anchor(self):
+        digest, size = sdk_intake._hash_file(
+            self.log_path, sdk_intake.MAX_LOG, "GDK trusted anchor")
+        self.assertEqual(digest, sha(self.log_path.read_bytes()))
+        self.assertEqual(size, self.log_path.stat().st_size)
+
+    def test_shared_hash_file_rejects_linked_trusted_anchor(self):
+        alias = self.output / "anchor.log"
+        try:
+            alias.symlink_to(self.log_path)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlink creation unavailable on this runner")
+        with self.assertRaisesRegex(ConflictError, "contains symlink or junction"):
+            sdk_intake._hash_file(
+                alias, sdk_intake.MAX_LOG, "GDK trusted anchor")
+
+    def test_shared_hash_file_rejects_linked_parent_of_trusted_anchor(self):
+        # trusted_intake calls _hash_file before _read_json. An independently
+        # pinned digest must not permit a linked parent in that first read.
+        alias_dir = self.output.parent / "trusted-alias"
+        try:
+            alias_dir.symlink_to(self.output.parent, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("directory symlink creation unavailable on this runner")
+        with self.assertRaisesRegex(ConflictError, "contains symlink or junction"):
+            sdk_intake._hash_file(
+                alias_dir / self.log_path.name, sdk_intake.MAX_LOG,
+                "GDK trusted anchor")
+
+
 if __name__ == "__main__":
     unittest.main()
