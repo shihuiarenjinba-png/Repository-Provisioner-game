@@ -43,7 +43,7 @@ def _approved(api, base: str, cas_sha: str) -> None:
     if type(encoded) is not str or len(encoded) > 90_000:
         raise ConflictError("GDK remote CAS Identity content missing or oversized")
     try:
-        raw = base64.b64decode(encoded.replace("\\r", "").replace("\\n", ""), validate=True)
+        raw = base64.b64decode(encoded.replace("\r", "").replace("\n", ""), validate=True)
     except (binascii.Error, ValueError) as exc:
         raise ConflictError("GDK remote CAS Identity base64 invalid") from exc
     if not 0 < len(raw) <= 65_536:
