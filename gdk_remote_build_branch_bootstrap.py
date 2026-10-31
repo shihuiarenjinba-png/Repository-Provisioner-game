@@ -6,11 +6,12 @@ The original source ref is immutable and is never updated by this tool.
 """
 from __future__ import annotations
 
+from gdk_provenance_timestamp import require_valid_provided_at
+
 import argparse
 import base64
 import binascii
 import json
-import re
 import sys
 from urllib.parse import quote
 
@@ -18,10 +19,6 @@ from gdk_build_intake import APPROVED_FIELDS, APPROVED_PATH, EXE_SHA256
 from package_identity_provisioner import (
     ConflictError, GitHubReturnClient, HoldError, PINNED_SIGNAL_SPRINT_GDK_IDENTITY,
     PINNED_SIGNAL_SPRINT_JOB, SHA40, _unique_json_object,
-)
-
-PROVIDED_AT = re.compile(
-    r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,6})?(?:Z|[+-]\d\d:\d\d)\Z"
 )
 
 
@@ -67,8 +64,7 @@ def _approved(api, base: str, cas_sha: str) -> None:
     for field, value in expected.items():
         if type(approved.get(field)) is not type(value) or approved[field] != value:
             raise ConflictError("GDK remote CAS reviewed Identity/provenance mismatch: " + field)
-    if type(approved.get("provided_at")) is not str or not PROVIDED_AT.fullmatch(approved["provided_at"]):
-        raise ConflictError("GDK remote CAS provided_at provenance invalid")
+    require_valid_provided_at(approved.get("provided_at"), label="GDK remote CAS provided_at")
 
 
 def bootstrap_remote_build_branch(cas_sha: str, *, create: bool = False, api=None) -> dict:
