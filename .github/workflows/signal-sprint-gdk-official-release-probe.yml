@@ -1,0 +1,39 @@
+name: Signal Sprint official GDK retail release metadata (read-only)
+
+# Signal Sprint only. Push performs a public release metadata GET, never
+# an SDK install, CAS, package build, Partner Center or Store operation.
+on:
+  push:
+    branches:
+      - codex/game-gdk-cas-resume-provenance-20261030
+    paths:
+      - 'gdk_official_release_probe.py'
+      - 'tests/test_gdk_official_release_probe.py'
+      - '.github/workflows/signal-sprint-gdk-official-release-probe.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  official-gdk-release-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run offline release-catalog regression tests
+        run: python -m unittest discover -s tests -p 'test_gdk_official_release_probe.py' -v
+      - name: Observe official public release metadata only
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python gdk_official_release_probe.py > gdk-official-release-probe.json
+          python -c "import json; r=json.load(open('gdk-official-release-probe.json', encoding='utf-8')); print('Official GDK release catalog:', r['catalog_status']); print('Unapproved 2610 tags:', r['observed_2610_release_tags_unapproved']); assert r['sdk_approved'] is False and r['real_msix_pass'] is False"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signal-sprint-official-gdk-release-metadata
+          path: gdk-official-release-probe.json
+          if-no-files-found: error
+          retention-days: 7
