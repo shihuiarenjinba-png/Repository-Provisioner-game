@@ -112,8 +112,9 @@ def _expect(obj: dict, key: str, expected):
 
 
 def _hash_file(path: Path, maximum: int, label: str) -> tuple[str, int]:
-    if path.is_symlink():
-        raise ConflictError(label + " linked")
+    # This helper is also used directly by trusted_intake for the external
+    # trust anchor, before _read_json. Reject redirected ancestors here too.
+    _reject_redirected_path(path, label)
     before = path.lstat()
     if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= maximum:
         raise ConflictError(label + " invalid regular file or size")
@@ -133,6 +134,7 @@ def _hash_file(path: Path, maximum: int, label: str) -> tuple[str, int]:
         after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
     ) or total != before.st_size:
         raise ConflictError(label + " changed during hashing")
+    _reject_redirected_path(path, label)
     return h.hexdigest(), total
 
 
