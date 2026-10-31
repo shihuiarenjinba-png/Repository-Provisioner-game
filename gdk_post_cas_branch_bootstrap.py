@@ -6,10 +6,11 @@ commits product files, pushes, merges, packages, or accesses Partner Center.
 """
 from __future__ import annotations
 
+from gdk_provenance_timestamp import require_valid_provided_at
+
 import argparse
 import json
 from pathlib import Path
-import re
 import subprocess
 import sys
 
@@ -75,10 +76,7 @@ def _verify_cas(repo: Path, cas_sha: str) -> tuple[str, str, str]:
     for key, expected in fixed.items():
         if type(approved.get(key)) is not type(expected) or approved[key] != expected:
             raise ConflictError("GDK CAS provenance mismatch: " + key)
-    if (type(approved.get("provided_at")) is not str or not re.fullmatch(
-            r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,6})?(?:Z|[+-]\d\d:\d\d)",
-            approved["provided_at"])):
-        raise ConflictError("GDK CAS provenance timestamp invalid")
+    require_valid_provided_at(approved.get("provided_at"), label="GDK CAS provenance timestamp")
     if _ref(repo, source_ref) != source or _ref(repo, cas_ref) != cas_sha:
         raise ConflictError("GDK source/CAS branch moved during verification")
     return source, source_ref, cas_ref
