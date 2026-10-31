@@ -749,11 +749,22 @@ class GitHubReturnClient:
         if gdk_return:
             cas_ref = self.api(base + "git/ref/heads/" + cas_branch, allow_missing=True)
             if cas_ref is None:
-                # An interrupted first attempt may leave this branch at the
-                # pinned source SHA. The next invocation can resume safely.
-                self.api(base + "git/refs", body={
-                    "ref": "refs/heads/" + cas_branch, "sha": job.source_sha})
-                cas_ref = self.api(base + "git/ref/heads/" + cas_branch)
+                # GitHub may create the ref and then lose its response, or
+                # another identical worker may win the create race (HTTP 422).
+                # Re-read the actual ref instead of treating either exception
+                # as proof of failure or blindly attempting a second create.
+                try:
+                    self.api(base + "git/refs", body={
+                        "ref": "refs/heads/" + cas_branch, "sha": job.source_sha})
+                except (ConflictError, RetryableError):
+                    cas_ref = self.api(base + "git/ref/heads/" + cas_branch,
+                                       allow_missing=True)
+                    if cas_ref is None:
+                        raise
+                else:
+                    cas_ref = self.api(base + "git/ref/heads/" + cas_branch)
+                # A concurrently completed CAS commit is only accepted via
+                # the strict existing-identity/one-file-ancestry gate below.
             head_sha = cas_ref.get("object", {}).get("sha") if isinstance(cas_ref, dict) else None
         else:
             head_sha = source_head
