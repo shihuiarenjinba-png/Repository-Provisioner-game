@@ -1,7 +1,8 @@
 name: Signal Sprint official GDK retail release metadata (read-only)
 
-# Signal Sprint only. Push performs a public release metadata GET, never
-# an SDK install, CAS, package build, Partner Center or Store operation.
+# Public GitHub release tags and Microsoft NuGet component versions are
+# separate UNAPPROVED observations, not a complete SDK or makepkg.exe approval.
+# No SDK install, CAS, package build, Partner Center or Store operation.
 on:
   push:
     branches:
@@ -9,6 +10,8 @@ on:
     paths:
       - 'gdk_official_release_probe.py'
       - 'tests/test_gdk_official_release_probe.py'
+      - 'gdk_nuget_component_probe.py'
+      - 'tests/test_gdk_nuget_component_probe.py'
       - '.github/workflows/signal-sprint-gdk-official-release-probe.yml'
 
 permissions:
@@ -23,17 +26,25 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Run offline release-catalog regression tests
+      - name: Run offline official release-catalog regression tests
         run: python -m unittest discover -s tests -p 'test_gdk_official_release_probe.py' -v
-      - name: Observe official public release metadata only
+      - name: Run offline NuGet component-catalog regression tests
+        run: python -m unittest discover -s tests -p 'test_gdk_nuget_component_probe.py' -v
+      - name: Observe public Microsoft GDK release metadata only
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           python gdk_official_release_probe.py > gdk-official-release-probe.json
           python -c "import json; r=json.load(open('gdk-official-release-probe.json', encoding='utf-8')); print('Official GDK release catalog:', r['catalog_status']); print('Unapproved 2610 tags:', r['observed_2610_release_tags_unapproved']); assert r['sdk_approved'] is False and r['real_msix_pass'] is False"
+      - name: Observe public NuGet GDK component versions only
+        run: |
+          python gdk_nuget_component_probe.py > gdk-nuget-component-probe.json
+          python -c "import json; r=json.load(open('gdk-nuget-component-probe.json', encoding='utf-8')); print('GDK component catalog:', r['component_catalog_status']); print('Unapproved 2610 component versions:', r['observed_2610_component_versions_unapproved']); assert r['complete_gdk_sdk_available'] is False and r['sdk_approved'] is False and r['real_msix_pass'] is False"
       - uses: actions/upload-artifact@v4
         with:
           name: signal-sprint-official-gdk-release-metadata
-          path: gdk-official-release-probe.json
+          path: |
+            gdk-official-release-probe.json
+            gdk-nuget-component-probe.json
           if-no-files-found: error
           retention-days: 7
