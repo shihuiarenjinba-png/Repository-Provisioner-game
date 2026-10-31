@@ -131,6 +131,12 @@ class RemoteBootstrapTests(unittest.TestCase):
         with self.assertRaisesRegex(ConflictError, "provided_at"):
             self.run_gate(create=True)
 
+    def test_impossible_calendar_provenance_rejected_without_write(self):
+        self.api.approved["provided_at"] = "2026-02-30T12:00:00Z"
+        with self.assertRaisesRegex(ConflictError, "calendar"):
+            self.run_gate(create=True)
+        self.assertNotIn(BUILD_BRANCH, self.api.refs)
+
     def test_remote_branch_move_after_creation_is_conflict(self):
         original = self.api.__call__
         def moving(endpoint, body=None, allow_missing=False):
