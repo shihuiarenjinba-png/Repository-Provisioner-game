@@ -341,6 +341,56 @@ class HostedBootstrapTests(unittest.TestCase):
                 with self.assertRaisesRegex(ConflictError, "checkout"):
                     bootstrap._winget()
 
+    def test_observed_makepkg_digest_rejects_symlinked_binary(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            real = root / "real-makepkg.exe"
+            real.write_bytes(b"synthetic unapproved GDK tool")
+            linked = root / "makepkg.exe"
+            try:
+                linked.symlink_to(real)
+            except (OSError, NotImplementedError):
+                self.skipTest("file symlink creation unavailable")
+            with self.assertRaisesRegex(ConflictError, "linked"):
+                bootstrap._sha256(linked)
+
+    def test_observed_makepkg_digest_rejects_linked_parent(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            actual = root / "actual"
+            actual.mkdir()
+            (actual / "makepkg.exe").write_bytes(b"synthetic unapproved GDK tool")
+            linked = root / "linked"
+            try:
+                linked.symlink_to(actual, target_is_directory=True)
+            except (OSError, NotImplementedError):
+                self.skipTest("directory symlink creation unavailable")
+            with self.assertRaisesRegex(ConflictError, "linked"):
+                bootstrap._sha256(linked / "makepkg.exe")
+
+    def test_observed_makepkg_digest_rejects_open_handle_identity_swap(self):
+        with tempfile.TemporaryDirectory() as temp:
+            exe = Path(temp) / "makepkg.exe"
+            exe.write_bytes(b"synthetic unapproved GDK tool")
+            before = exe.lstat()
+            # A same-size/same-mtime path swap must not attribute the bytes
+            # of an opened handle to a different SDK executable identity.
+            wrong_handle = mock.Mock(st_dev=before.st_dev,
+                                     st_ino=before.st_ino + 1,
+                                     st_size=before.st_size)
+            with mock.patch.object(bootstrap.os, "fstat", return_value=wrong_handle):
+                with self.assertRaisesRegex(ConflictError, "changed before open"):
+                    bootstrap._sha256(exe)
+
+    def test_observed_makepkg_digest_rechecks_link_after_hash(self):
+        with tempfile.TemporaryDirectory() as temp:
+            exe = Path(temp) / "makepkg.exe"
+            exe.write_bytes(b"synthetic unapproved GDK tool")
+            with mock.patch.object(bootstrap, "_regular_executable",
+                                   side_effect=[exe, ConflictError("linked after hash")]):
+                with self.assertRaisesRegex(ConflictError, "linked after hash"):
+                    bootstrap._sha256(exe)
+
     def test_symlinked_winget_executable_rejected(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
