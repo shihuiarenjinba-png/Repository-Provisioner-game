@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import sys
 
@@ -59,16 +60,35 @@ def _winget() -> Path | None:
 
 
 def _sha256(path: Path) -> str:
-    before = path.stat()
-    if not path.is_file() or not 0 < before.st_size <= MAX_EXE:
+    """Pin the observed SDK bytes to one unlinked file identity.
+
+    An observed digest is evidence for independent review, not approval. The
+    file may be replaced between discovery and hashing, even with its original
+    size and modification time restored. Compare the opened handle and final
+    path identity as well as size and timestamps; fail closed on redirection.
+    """
+    selected = _regular_executable(path)
+    if selected is None:
+        raise ConflictError("installed GDK makepkg.exe missing before hashing")
+    before = path.lstat()
+    if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= MAX_EXE:
         raise ConflictError("installed GDK makepkg.exe size/type invalid")
     h = hashlib.sha256()
     with path.open("rb") as stream:
+        opened = os.fstat(stream.fileno())
+        if (opened.st_dev, opened.st_ino, opened.st_size) != (
+                before.st_dev, before.st_ino, before.st_size):
+            raise ConflictError("installed GDK makepkg.exe changed before open")
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             h.update(chunk)
-    after = path.stat()
-    if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+    after = path.lstat()
+    if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns,
+            before.st_ctime_ns) != (
+            after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns,
+            after.st_ctime_ns):
         raise ConflictError("installed GDK makepkg.exe changed during hashing")
+    if _regular_executable(path) != selected:
+        raise ConflictError("installed GDK makepkg.exe path redirected during hashing")
     return h.hexdigest()
 
 
