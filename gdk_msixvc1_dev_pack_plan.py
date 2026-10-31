@@ -10,11 +10,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 import sys
 
 from gdk_sdk_pack_plan import make_pack_plan
-from package_identity_provisioner import ConflictError, HoldError
+from gdk_build_intake import EXE_SHA256
+from gdk_msixvc2_preflight import MAX_FILE_BYTES
+from package_identity_provisioner import ConflictError, HoldError, PINNED_SIGNAL_SPRINT_JOB
 
 # Only these exact options are allowed in this development-only alternative.
 MSIXVC2_PREFIX = ["makepkg.exe", "pack", "/msixvc2", "/d"]
@@ -47,6 +50,30 @@ def make_msixvc1_dev_plan(factory_checkout: Path, artifact_zip: Path,
     for key, value in expected.items():
         if type(base.get(key)) is not type(value) or base[key] != value:
             raise ConflictError("GDK shared preflight mismatch: " + key)
+    # The development-only format switch must not weaken the immutable
+    # Signal Sprint correlation, receipt or exact six-file payload contract.
+    # Recheck here as well as in the shared preflight so a future change to
+    # that helper cannot silently create a different-byte development plan.
+    bindings = {
+        "request_id": PINNED_SIGNAL_SPRINT_JOB["request_id"],
+        "source_sha": PINNED_SIGNAL_SPRINT_JOB["source_sha"],
+        "cas_commit_sha": cas_sha,
+        "factory_head_sha": build_sha,
+        "package_version": package_version,
+        "reviewed_display_name": reviewed_display_name,
+    }
+    for key, expected_value in bindings.items():
+        if type(base.get(key)) is not type(expected_value) or base[key] != expected_value:
+            raise ConflictError("GDK MSIXVC1 immutable binding mismatch: " + key)
+    receipt_sha = base.get("verified_receipt_sha256")
+    if type(receipt_sha) is not str or re.fullmatch(r"[0-9a-f]{64}", receipt_sha) is None:
+        raise ConflictError("GDK MSIXVC1 preflight receipt digest invalid")
+    hashes = base.get("staging_files_sha256")
+    if (type(hashes) is not dict or set(hashes) != set(MAX_FILE_BYTES)
+            or any(type(v) is not str or re.fullmatch(r"[0-9a-f]{64}", v) is None
+                   for v in hashes.values())
+            or hashes["SignalSprint.exe"] != EXE_SHA256):
+        raise ConflictError("GDK MSIXVC1 immutable staging payload mismatch")
     argv = base.get("sdk_command_argv_not_executed")
     if (type(argv) is not list or len(argv) != 9
             or not all(type(part) is str for part in argv)
