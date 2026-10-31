@@ -6,7 +6,8 @@ import unittest
 import gdk_remote_build_branch_bootstrap as remote
 from gdk_build_intake import APPROVED_FIELDS, APPROVED_PATH, EXE_SHA256
 from package_identity_provisioner import (
-    ConflictError, PINNED_SIGNAL_SPRINT_GDK_IDENTITY, PINNED_SIGNAL_SPRINT_JOB,
+    ConflictError, RetryableError, PINNED_SIGNAL_SPRINT_GDK_IDENTITY,
+    PINNED_SIGNAL_SPRINT_JOB,
 )
 
 SOURCE = PINNED_SIGNAL_SPRINT_JOB["source_sha"]
@@ -88,6 +89,41 @@ class RemoteBootstrapTests(unittest.TestCase):
         self.assertEqual(self.api.refs[PINNED_SIGNAL_SPRINT_JOB["source_branch"]], SOURCE)
         self.assertEqual(len([1 for endpoint, body in self.api.calls if body]), 1)
         self.assertFalse(first["real_msixvc_built"])
+
+    def test_concurrent_identical_create_conflict_is_idempotent(self):
+        original = self.api.__call__
+        def racing(endpoint, body=None, allow_missing=False):
+            if endpoint.endswith("git/refs") and body:
+                self.api.refs[BUILD_BRANCH] = CAS
+                raise ConflictError("GitHub target, validation, or conflict error (422)")
+            return original(endpoint, body=body, allow_missing=allow_missing)
+        result = remote.bootstrap_remote_build_branch(CAS, create=True, api=racing)
+        self.assertTrue(result["remote_ref_created_or_verified"])
+        self.assertEqual(self.api.refs[BUILD_BRANCH], CAS)
+        self.assertEqual(self.api.refs[PINNED_SIGNAL_SPRINT_JOB["source_branch"]], SOURCE)
+
+    def test_lost_create_response_reconciles_remote_ref(self):
+        original = self.api.__call__
+        def lost_response(endpoint, body=None, allow_missing=False):
+            value = original(endpoint, body=body, allow_missing=allow_missing)
+            if endpoint.endswith("git/refs") and body:
+                raise RetryableError("GitHub API timed out; reconcile before retry")
+            return value
+        result = remote.bootstrap_remote_build_branch(CAS, create=True, api=lost_response)
+        self.assertTrue(result["remote_ref_created_or_verified"])
+        self.assertEqual(self.api.refs[BUILD_BRANCH], CAS)
+
+    def test_concurrent_different_create_conflict_never_overwrites(self):
+        original = self.api.__call__
+        def racing(endpoint, body=None, allow_missing=False):
+            if endpoint.endswith("git/refs") and body:
+                self.api.refs[BUILD_BRANCH] = OTHER
+                raise ConflictError("GitHub target, validation, or conflict error (422)")
+            return original(endpoint, body=body, allow_missing=allow_missing)
+        with self.assertRaises(ConflictError):
+            remote.bootstrap_remote_build_branch(CAS, create=True, api=racing)
+        self.assertEqual(self.api.refs[BUILD_BRANCH], OTHER)
+        self.assertEqual(self.api.refs[PINNED_SIGNAL_SPRINT_JOB["source_branch"]], SOURCE)
 
     def test_existing_different_remote_head_is_conflict(self):
         self.api.refs[BUILD_BRANCH] = OTHER
