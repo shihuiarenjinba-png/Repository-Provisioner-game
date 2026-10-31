@@ -123,6 +123,19 @@ class GdkCasResumeProvenanceTests(unittest.TestCase):
         self.assertEqual(refs, 2, "CAS branch must be rechecked after commit inspection")
         self.assertFalse(any(endpoint == "graphql" for endpoint in calls))
 
+    def test_product_evidence_reads_are_pinned_to_immutable_source_commit(self):
+        # A mutable branch may briefly move between pre/post CAS ref checks.
+        # GitHub Contents reads must bind manifest and proposal to source_sha.
+        result, calls, _ = self.resume()
+        self.assertEqual(result["status"], "EXISTING_VERIFIED")
+        product_reads = [endpoint for endpoint in calls
+                         if "/manifest.json" in endpoint or "/proposals/" in endpoint]
+        self.assertEqual(len(product_reads), 2)
+        for endpoint in product_reads:
+            with self.subTest(endpoint=endpoint):
+                self.assertTrue(endpoint.endswith("?ref=" + SOURCE))
+                self.assertNotIn("?ref=" + self.job.source_branch, endpoint)
+
     def test_real_github_wrapped_base64_is_idempotent(self):
         # Exercise manifest, proposal and existing approved Identity through
         # the complete read-only resume path, not just a standalone decoder.
