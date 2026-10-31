@@ -67,6 +67,25 @@ class GdkIdentityContractTests(unittest.TestCase):
         self.assertNotIn("authenticated_account", official)
         self.assertNotIn("official_evidence_url", official)
 
+    def test_intake_rejects_unknown_or_normalized_timezone_offsets(self):
+        # A regex match is not enough: Python normalizes +09:99, and
+        # RFC3339 -00:00 means unknown local offset rather than UTC.
+        config = ProductConfig.load(ROOT / "config.json")
+        job = Job.validate(raw_job(), config)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "official-identity.json"
+            for stamp in (
+                "2026-10-28T10:49:00+09:99",
+                "2026-10-28T10:49:00+25:00",
+                "2026-10-28T10:49:00-00:00",
+            ):
+                with self.subTest(stamp=stamp):
+                    identity = gdk_identity()
+                    identity["provided_at"] = stamp
+                    path.write_text(json.dumps(identity), encoding="utf-8")
+                    with self.assertRaisesRegex(Exception, "timezone offset"):
+                        OfficialIdentityProvider(path).lookup(job)
+
     def test_cas_payload_records_gdk_ids_and_keeps_version_separate(self):
         config = ProductConfig.load(ROOT / "config.json")
         job = Job.validate(raw_job(), config)

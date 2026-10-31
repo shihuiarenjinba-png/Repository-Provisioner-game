@@ -25,6 +25,17 @@ def require_valid_provided_at(value: object, *, label: str = "GDK Identity provi
     """
     if type(value) is not str or not RFC3339.fullmatch(value):
         raise ConflictError(label + " must be RFC3339 with timezone")
+    # Python datetime.fromisoformat accepts e.g. +09:99 by normalizing it
+    # into a different offset. RFC3339 offset components must be bounded
+    # independently; an invalid user-provided timestamp must never be fixed.
+    # RFC3339 -00:00 explicitly means the offset is unknown, so it
+    # cannot establish the operator's timestamp provenance.
+    if value.endswith("-00:00"):
+        raise ConflictError(label + " timezone offset unknown")
+    if value[-1] != "Z":
+        hour, minute = int(value[-5:-3]), int(value[-2:])
+        if hour > 23 or minute > 59:
+            raise ConflictError(label + " timezone offset invalid")
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError as exc:

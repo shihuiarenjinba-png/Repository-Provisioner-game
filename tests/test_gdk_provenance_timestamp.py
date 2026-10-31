@@ -16,7 +16,10 @@ class GdkProvidedAtTests(unittest.TestCase):
     def test_invalid_calendar_or_clock_rejected(self):
         for stamp in ("2026-02-30T10:49:00Z", "2026-13-28T10:49:00Z",
                       "2026-10-28T25:49:00Z", "2026-10-28T10:60:00Z",
-                      "2026-10-28T10:49:00+25:00"):
+                      "2026-10-28T10:49:00+25:00",
+                      "2026-10-28T10:49:00+09:99",
+                      "2026-10-28T10:49:00-00:60",
+                      "2026-10-28T10:49:00-00:00"):
             with self.subTest(stamp=stamp):
                 with self.assertRaises(ConflictError):
                     require_valid_provided_at(stamp)

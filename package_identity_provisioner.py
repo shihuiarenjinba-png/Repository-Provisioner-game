@@ -636,6 +636,15 @@ class OfficialIdentityProvider:
                     r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})",
                     provided_at)):
                 raise HoldError("User-provided Identity timestamp must be RFC3339 with timezone")
+            # RFC3339 -00:00 denotes an unknown local offset, not UTC.
+            # Python also normalizes some impossible offsets (e.g. +09:99).
+            # Neither is acceptable as reviewed operator provenance.
+            if provided_at.endswith("-00:00"):
+                raise HoldError("User-provided Identity timezone offset is unknown")
+            if provided_at[-1] != "Z":
+                offset_hour, offset_minute = int(provided_at[-5:-3]), int(provided_at[-2:])
+                if offset_hour > 23 or offset_minute > 59:
+                    raise HoldError("Invalid user-provided Identity timezone offset")
             try:
                 provided_time = datetime.fromisoformat(provided_at.replace("Z", "+00:00"))
             except ValueError as exc:
@@ -895,9 +904,16 @@ class GitHubReturnClient:
     def _decode_content(item: Any, limit: int) -> bytes:
         if not isinstance(item, dict) or item.get("encoding") != "base64":
             raise ConflictError("Factory product evidence is missing")
+        encoded = item.get("content")
+        # GitHub's Contents API wraps base64 with CR/LF. A strict decoder
+        # rejects legitimate GitHub responses unless those line breaks are
+        # removed. Do not strip spaces, tabs or other non-base64 characters.
+        if type(encoded) is not str or len(encoded) > 2 * limit + 2048:
+            raise ConflictError("Factory product evidence is missing or oversized")
         try:
-            raw = base64.b64decode(item.get("content", ""), validate=True)
-        except Exception as exc:
+            raw = base64.b64decode(encoded.replace("\r", "").replace("\n", ""),
+                                   validate=True)
+        except (ValueError, TypeError, base64.binascii.Error) as exc:
             raise ConflictError("Factory product evidence is not valid base64") from exc
         if len(raw) > limit:
             raise ConflictError("Factory product evidence is oversized")
@@ -911,9 +927,15 @@ class GitHubReturnClient:
         if not isinstance(existing, dict) or existing.get("encoding") != "base64":
             return False
         try:
-            content = json.loads(base64.b64decode(existing["content"], validate=True),
-                                 object_pairs_hook=_unique_json_object)
-        except (KeyError, ValueError, TypeError, json.JSONDecodeError):
+            # Reuse the bounded, GitHub-CR/LF-aware decoder. Otherwise an
+            # identical approved Identity is rejected on a real CAS retry,
+            # even though the same bytes pass in offline unwrapped fixtures.
+            raw = GitHubReturnClient._decode_content(existing, 65_536)
+            content = json.loads(raw.decode("utf-8"),
+                                 object_pairs_hook=_unique_json_object,
+                                 parse_constant=lambda _: (_ for _ in ()).throw(
+                                     ValueError("nonfinite JSON value")))
+        except (ConflictError, KeyError, UnicodeError, ValueError, TypeError):
             return False
         common = {
             "schema_version": SCHEMA_VERSION,
