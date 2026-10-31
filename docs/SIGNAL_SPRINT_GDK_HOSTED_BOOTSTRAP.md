@@ -25,10 +25,39 @@ Authoritative references:
 - https://learn.microsoft.com/en-us/gaming/gdk/docs/features/common/packaging/overviews/packaging-getting-started-for-pc-msixvc2
 - https://learn.microsoft.com/en-us/gaming/gdk/docs/features/common/packaging/overviews/packaging-msixvc2-overview
 
+## Two-step SDK hash discovery (contract prepared; no installation performed)
+
+The earlier install gate required an independently approved `makepkg.exe` SHA-256
+*before* any hosted runner could obtain its bytes. The optional **observe-only**
+mode separates byte discovery from approval. It does **not** approve the SDK.
+
+After Microsoft publishes a specific official 2610.x version, a human may
+explicitly dispatch the hosted workflow with `install_sdk=true`,
+`observe_only=true`, and an exact `sdk_version`. Only that explicit
+manual dispatch may install the selected SDK on the ephemeral GitHub-hosted
+Windows runner. The resulting evidence status is
+`GDK_HOSTED_SDK_HASH_OBSERVED_UNAPPROVED_NO_BUILD`; it records
+`makepkg_sha256_observed_unapproved`, `sdk_approved=false`, and
+`sdk_version_verified=false`. It never invokes `makepkg.exe` and cannot
+set CAS, real-package, E2E, or Store success. This run has **not** been
+dispatched and no 2610.x version is currently selected.
+
+An independent owner review must then verify the official SDK version,
+installer provenance and executable hash via a separate trusted channel.
+Only after that review may a separate manual dispatch use
+`install_sdk=true`, `observe_only=false`, the exact approved
+`sdk_version`, and `approved_makepkg_sha256`. Push and PR runs remain
+read-only, and the Python gate refuses installation on local/self-hosted
+Windows. Observation with an approval digest is rejected to prevent
+confusing the two modes. A GitHub workflow_dispatch may require the workflow
+to exist on the default branch; do not merge this Draft merely to enable it.
+
 A later **manual** workflow_dispatch on a branch containing this workflow (GitHub generally requires a workflow on the default branch for manual dispatch) may set:
 - `install_sdk=true`
 - `sdk_version` = an independently reviewed exact **2610.x** GDK package version
 - `approved_makepkg_sha256` = an independently approved 64-character digest of the exact expected `makepkg.exe`, obtained outside the install output
+
+A hosted Windows image can expose an unresolvable WinGet App Installer alias. In probe-only mode this is recorded as `GDK_HOSTED_WINGET_UNTRUSTED_PROBE_ONLY` with `retail_2610_catalog_status=UNKNOWN`, not as an absent 2610 release. The same alias remains a hard conflict for either manual installation mode. This protects the read-only CI signal without relaxing executable trust.
 
 WinGet discovery searches **only absolute PATH directories** (not the working directory or relative PATH entries), refuses checkout-local executables, and fails closed when multiple distinct `winget.exe` candidates exist. A successful WinGet probe does **not** approve an SDK version or `makepkg.exe` digest.
 
@@ -39,3 +68,23 @@ The helper refuses installation unless running on GitHub-hosted Windows with `CI
 A successful hosted bootstrap means only `GDK_HOSTED_SDK_BYTES_APPROVED_NO_BUILD`, not `POST_IDENTITY_READY`, `CAS_RETURN_PASS`, `REAL_MSIX_PASS` or `E2E PASS`. No real package can be produced until actual authorized CAS, post-CAS build checkout, reviewed reserved display name and package version, preserved fixed EXE ZIP, and the full independent GDK handoff gate pass. SDK installation does not imply certification.
 
 The immutable source SHA is `c058cbf7fe38e02d929c67d047d717ff74bd522e`; request ID is `game-signal-sprint-c058cbf7fe38e02d929c67d047d717ff74bd522e`. Neither is modified. The approved user-provided Store ID is `9N21MJM7S57P`. No new GAME, source mutation, local security changes, Partner Center login, Identity retrieval, Store upload, main/release write, merge or central E2E ledger edit.
+
+## 2026-10-30 live hosted WinGet catalog re-probe (Draft #38)
+
+The active Signal Sprint Draft branch now triggers the **read-only** hosted Windows
+catalog probe on changes to the probe workflow or SDK discovery/bootstrap code.
+Push-triggered jobs cannot install the SDK (the Python install gate requires
+explicit manual workflow_dispatch plus independent SDK version and makepkg SHA).
+
+- Workflow run: https://github.com/shihuiarenjinba-png/Repository-Provisioner-game/actions/runs/41032064494 (SUCCESS, 2026-10-30 UTC).
+- `winget_available=true`, `catalog_query_status=CANDIDATES_FOUND`.
+- Observed **unapproved** 2604 versions: `2604.0.7822`, `2604.1.7839`, `2604.2.7849`, `2604.3.7874`, `2604.4.7897`, `2604.5.7903`.
+- `unapproved_2610_candidates=[]`, `retail_2610_catalog_status=NOT_LISTED` in this specific WinGet source at probe time.
+- `sdk_installed_by_this_run=false`, `makepkg_executed=false`, `real_msix_pass=false`.
+
+**Decision:** This is not evidence that 2610 is unavailable from every Microsoft
+channel. It does establish that the tested hosted WinGet catalog cannot yet
+supply a reviewed 2610 SDK version pin. Keep the MSIXVC2 retail build gate
+closed until an official 2610+ installer and independently approved
+`makepkg.exe` SHA-256 are available. Do not substitute preview 2604 or guess a
+digest. The source SHA and original EXE artifact remain immutable.

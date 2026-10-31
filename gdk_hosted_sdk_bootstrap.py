@@ -1,8 +1,10 @@
 """Opt-in, hosted-only Microsoft GDK installation gate for Signal Sprint.
 
 Read-only by default. The installer may run ONLY on an ephemeral GitHub-hosted
-Windows runner with explicit invocation, pinned version, and an independently
-approved makepkg.exe SHA-256. It never executes makepkg, CAS, or Store operations.
+Windows runner with explicit invocation and pinned version. Observation mode records an
+UNAPPROVED makepkg.exe digest for later independent review; approved-install
+mode still requires a separately approved digest. It never executes makepkg,
+CAS, or Store operations.
 """
 from __future__ import annotations
 
@@ -12,10 +14,11 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import sys
 
-from gdk_sdk_discovery import discover_makepkg
+from gdk_sdk_discovery import discover_makepkg, _regular_executable
 from package_identity_provisioner import ConflictError, HoldError, PINNED_SIGNAL_SPRINT_JOB
 
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -42,28 +45,50 @@ def _winget() -> Path | None:
         if not directory.is_absolute():
             continue
         candidate = directory / "winget.exe"
-        if not candidate.is_file():
+        # Match the GDK tool's fail-closed discovery: neither the executable
+        # nor any parent may be a symlink or Windows junction. Resolving a
+        # linked PATH entry could otherwise execute an unreviewed installer.
+        resolved = _regular_executable(candidate)
+        if resolved is None:
             continue
-        resolved = candidate.resolve()
         if root is not None and (resolved == root or root in resolved.parents):
             raise ConflictError("WinGet executable inside checkout is untrusted")
-        found.setdefault(str(resolved).casefold(), candidate)
+        found.setdefault(str(resolved).casefold(), resolved)
     if len(found) > 1:
         raise ConflictError("multiple WinGet executables found on PATH; refusing ambiguous installer")
     return next(iter(found.values())) if found else None
 
 
 def _sha256(path: Path) -> str:
-    before = path.stat()
-    if not path.is_file() or not 0 < before.st_size <= MAX_EXE:
+    """Pin the observed SDK bytes to one unlinked file identity.
+
+    An observed digest is evidence for independent review, not approval. The
+    file may be replaced between discovery and hashing, even with its original
+    size and modification time restored. Compare the opened handle and final
+    path identity as well as size and timestamps; fail closed on redirection.
+    """
+    selected = _regular_executable(path)
+    if selected is None:
+        raise ConflictError("installed GDK makepkg.exe missing before hashing")
+    before = path.lstat()
+    if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= MAX_EXE:
         raise ConflictError("installed GDK makepkg.exe size/type invalid")
     h = hashlib.sha256()
     with path.open("rb") as stream:
+        opened = os.fstat(stream.fileno())
+        if (opened.st_dev, opened.st_ino, opened.st_size) != (
+                before.st_dev, before.st_ino, before.st_size):
+            raise ConflictError("installed GDK makepkg.exe changed before open")
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             h.update(chunk)
-    after = path.stat()
-    if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+    after = path.lstat()
+    if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns,
+            before.st_ctime_ns) != (
+            after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns,
+            after.st_ctime_ns):
         raise ConflictError("installed GDK makepkg.exe changed during hashing")
+    if _regular_executable(path) != selected:
+        raise ConflictError("installed GDK makepkg.exe path redirected during hashing")
     return h.hexdigest()
 
 
@@ -80,7 +105,10 @@ def _catalog_assessment(status: str, candidates: list[str]) -> dict:
     preview = [v for v in ordered if v.startswith("2604.")][-50:]
     retail = [v for v in ordered if v.startswith("2610.")][-50:]
     versions = sorted(preview + retail, key=lambda v: tuple(int(p) for p in v.split(".")))
-    known = status in ("CANDIDATES_FOUND", "NO_2604_OR_2610_CANDIDATES")
+    # A successful WinGet command with no recognizable 2604/2610 tokens may
+    # be a localized, truncated, or otherwise unparseable response. It is
+    # UNKNOWN, not proof that the retail SDK is absent from the catalog.
+    known = status == "CANDIDATES_FOUND"
     return {
         "catalog_query_status": status,
         "unapproved_version_candidates": versions,
@@ -114,12 +142,12 @@ def _probe_versions(winget: Path) -> dict:
         return _catalog_assessment("FAILED", [])
     candidates = sorted(set(VERSION_TOKEN.findall(completed.stdout or "")))
     return _catalog_assessment(
-        "CANDIDATES_FOUND" if candidates else "NO_2604_OR_2610_CANDIDATES",
+        "CANDIDATES_FOUND" if candidates else "NO_RECOGNIZED_VERSION_TOKENS",
         candidates)
 
 
 def bootstrap(*, install: bool = False, probe_versions: bool = False, sdk_version: str = "",
-              approved_makepkg_sha256: str = "") -> dict:
+              approved_makepkg_sha256: str = "", observe_only: bool = False) -> dict:
     base = {
         "schema_version": 1,
         "product": "Signal Sprint",
@@ -135,11 +163,25 @@ def bootstrap(*, install: bool = False, probe_versions: bool = False, sdk_versio
     }
     if install and probe_versions:
         raise HoldError("GDK probe and install modes cannot be combined")
+    if observe_only and not install:
+        raise HoldError("GDK SDK observation requires explicit install")
     if sys.platform != "win32":
         if install:
             raise HoldError("GDK bootstrap installation requires Windows")
         return {**base, "status": "GDK_HOSTED_WINDOWS_REQUIRED", "winget_available": False}
-    winget = _winget()
+    try:
+        winget = _winget()
+    except (ConflictError, HoldError) as exc:
+        # Hosted images may expose an unresolvable App Installer alias on PATH.
+        # A read-only catalog probe should report UNKNOWN instead of failing
+        # the whole workflow or claiming that retail SDK versions are absent.
+        # Installation must still fail closed on any untrusted WinGet path.
+        if install:
+            raise
+        return {**base, "status": "GDK_HOSTED_WINGET_UNTRUSTED_PROBE_ONLY",
+                "winget_available": False,
+                "winget_discovery_error": str(exc),
+                **_catalog_assessment("WINGET_UNTRUSTED", [])}
     if not install:
         catalog = (_probe_versions(winget) if probe_versions and winget is not None
                    else _catalog_assessment("NOT_QUERIED" if not probe_versions
@@ -161,7 +203,10 @@ def bootstrap(*, install: bool = False, probe_versions: bool = False, sdk_versio
         raise HoldError("GDK installation requires manual workflow_dispatch with install_sdk=true")
     if type(sdk_version) is not str or not OCTOBER_GDK.fullmatch(sdk_version):
         raise HoldError("explicit October 2026 GDK 2610.x version pin required")
-    if (type(approved_makepkg_sha256) is not str
+    if observe_only:
+        if approved_makepkg_sha256:
+            raise HoldError("observation mode must not accept an approved digest")
+    elif (type(approved_makepkg_sha256) is not str
             or not SHA256.fullmatch(approved_makepkg_sha256)):
         raise HoldError("independently approved makepkg.exe SHA-256 required")
     if winget is None:
@@ -182,6 +227,13 @@ def bootstrap(*, install: bool = False, probe_versions: bool = False, sdk_versio
     # and the installed tool must match the independently supplied digest.
     executable = discover_makepkg()
     observed = _sha256(executable)
+    if observe_only:
+        return {**base, "status": "GDK_HOSTED_SDK_HASH_OBSERVED_UNAPPROVED_NO_BUILD",
+                "winget_available": True, "sdk_installed_by_this_run": True,
+                "sdk_version_candidate_unapproved": sdk_version,
+                "makepkg_sha256_observed_unapproved": observed,
+                "sdk_version_verified": False, "sdk_approved": False,
+                "next_stage": "INDEPENDENT_SDK_VERSION_AND_HASH_REVIEW"}
     if observed != approved_makepkg_sha256:
         raise ConflictError("installed makepkg.exe differs from approved SHA-256")
     return {**base, "status": "GDK_HOSTED_SDK_BYTES_APPROVED_NO_BUILD",
@@ -194,6 +246,8 @@ def bootstrap(*, install: bool = False, probe_versions: bool = False, sdk_versio
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--install", action="store_true")
+    parser.add_argument("--observe-only", action="store_true",
+                        help="manual hosted install for UNAPPROVED digest observation only")
     parser.add_argument("--probe-versions", action="store_true",
                         help="read-only WinGet catalog query; never approves versions")
     parser.add_argument("--sdk-version", default="")
@@ -202,7 +256,8 @@ def main(argv=None) -> int:
     try:
         result = bootstrap(install=args.install, probe_versions=args.probe_versions,
                            sdk_version=args.sdk_version,
-                           approved_makepkg_sha256=args.approved_makepkg_sha256)
+                           approved_makepkg_sha256=args.approved_makepkg_sha256,
+                           observe_only=args.observe_only)
     except (ConflictError, HoldError, OSError, ValueError, TypeError) as exc:
         result = {"status": getattr(exc, "status", "HOLD"), "error": str(exc),
                   "partner_center_selection": "GDK_GAME",

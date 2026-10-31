@@ -17,6 +17,8 @@ import sys
 
 from package_identity_provisioner import ConflictError, HoldError, PINNED_SIGNAL_SPRINT_JOB
 from gdk_windows_filename import validate_windows_basename, validate_unique_windows_names
+from gdk_build_intake import EXE_SHA256
+from gdk_msixvc2_preflight import MAX_FILE_BYTES
 
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 SHA40 = re.compile(r"[0-9a-f]{40}\Z")
@@ -50,11 +52,39 @@ RESULT_FIELDS = {
 }
 
 
-def _read_json(path: Path, label: str) -> dict:
-    if path.is_symlink() or not path.is_file():
-        raise HoldError(label + " missing or linked")
-    if not 0 < path.stat().st_size <= MAX_JSON:
-        raise ConflictError(label + " size invalid")
+def _reject_redirected_path(path: Path, label: str) -> None:
+    """Reject linked ancestors, not only a linked leaf, for SDK evidence.
+
+    A symlinked parent can redirect an apparently ordinary package/log/JSON
+    file outside the reviewed GDK output location. Recheck after byte reads
+    as well; this does not replace trusted storage against concurrent races.
+    """
+    for component in (path, *path.parents):
+        try:
+            if (component.is_symlink()
+                    or getattr(component, "is_junction", lambda: False)()):
+                raise ConflictError(label + " contains symlink or junction")
+        except (OSError, RuntimeError) as exc:
+            raise HoldError(label + " path cannot be inspected") from exc
+
+
+def _read_json(path: Path, label: str, *, with_digest: bool = False):
+    """Read bounded JSON from one stable regular file and pin its byte digest."""
+    _reject_redirected_path(path, label)
+    before = path.lstat()
+    if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= MAX_JSON:
+        raise ConflictError(label + " size invalid or not a regular file")
+    with path.open("rb") as stream:
+        opened = os.fstat(stream.fileno())
+        if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+            raise ConflictError(label + " changed before open")
+        raw = stream.read(MAX_JSON + 1)
+    after = path.lstat()
+    if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+        after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
+    ) or len(raw) != before.st_size:
+        raise ConflictError(label + " changed during read")
+    _reject_redirected_path(path, label)
 
     def unique(pairs):
         result = {}
@@ -65,13 +95,14 @@ def _read_json(path: Path, label: str) -> dict:
         return result
 
     try:
-        value = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique,
+        value = json.loads(raw.decode("utf-8"), object_pairs_hook=unique,
                            parse_constant=lambda v: (_ for _ in ()).throw(ValueError(v)))
     except (UnicodeError, json.JSONDecodeError, ValueError) as exc:
         raise ConflictError(label + " invalid strict JSON") from exc
     if type(value) is not dict:
         raise ConflictError(label + " must be object")
-    return value
+    # Other GDK modules import _read_json and expect a dict; retain that API.
+    return (value, hashlib.sha256(raw).hexdigest()) if with_digest else value
 
 
 def _expect(obj: dict, key: str, expected):
@@ -81,8 +112,9 @@ def _expect(obj: dict, key: str, expected):
 
 
 def _hash_file(path: Path, maximum: int, label: str) -> tuple[str, int]:
-    if path.is_symlink():
-        raise ConflictError(label + " linked")
+    # This helper is also used directly by trusted_intake for the external
+    # trust anchor, before _read_json. Reject redirected ancestors here too.
+    _reject_redirected_path(path, label)
     before = path.lstat()
     if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= maximum:
         raise ConflictError(label + " invalid regular file or size")
@@ -102,13 +134,21 @@ def _hash_file(path: Path, maximum: int, label: str) -> tuple[str, int]:
         after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
     ) or total != before.st_size:
         raise ConflictError(label + " changed during hashing")
+    _reject_redirected_path(path, label)
     return h.hexdigest(), total
 
 
 def intake(plan_path: Path, evidence_path: Path, package_dir: Path,
            validation_log: Path) -> dict:
-    plan = _read_json(plan_path, "GDK plan")
-    result = _read_json(evidence_path, "GDK SDK result")
+    for path, label in (
+        (plan_path, "GDK plan"),
+        (evidence_path, "GDK SDK result"),
+        (package_dir, "GDK output"),
+        (validation_log, "GDK validation log"),
+    ):
+        _reject_redirected_path(path, label)
+    plan, plan_sha = _read_json(plan_path, "GDK plan", with_digest=True)
+    result, evidence_sha = _read_json(evidence_path, "GDK SDK result", with_digest=True)
     if set(plan) != PLAN_FIELDS or set(result) != RESULT_FIELDS:
         raise ConflictError("GDK plan/result schema unexpected")
     for obj in (plan, result):
@@ -143,10 +183,15 @@ def intake(plan_path: Path, evidence_path: Path, package_dir: Path,
     if type(plan["verified_receipt_sha256"]) is not str or not SHA256.fullmatch(plan["verified_receipt_sha256"]):
         raise ConflictError("GDK preflight receipt SHA invalid")
     hashes = plan["staging_files_sha256"]
-    if type(hashes) is not dict or len(hashes) != 6 or "SignalSprint.exe" not in hashes or any(
+    # Intake must independently enforce the exact reviewed GDK payload, not
+    # merely accept any six self-reported filenames and hashes. A plan/result
+    # pair could otherwise agree on a substituted executable or asset list.
+    if type(hashes) is not dict or set(hashes) != set(MAX_FILE_BYTES) or any(
         type(v) is not str or not SHA256.fullmatch(v) for v in hashes.values()
     ):
-        raise ConflictError("GDK staging hashes invalid")
+        raise ConflictError("GDK staging hashes invalid or unreviewed payload")
+    if hashes["SignalSprint.exe"] != EXE_SHA256:
+        raise ConflictError("GDK staging immutable executable SHA mismatch")
     argv = plan["sdk_command_argv_not_executed"]
     if type(argv) is not list or len(argv) != 9 or not all(type(x) is str for x in argv):
         raise ConflictError("GDK SDK argv shape invalid")
@@ -207,8 +252,26 @@ def intake(plan_path: Path, evidence_path: Path, package_dir: Path,
         raise ConflictError("GDK package bytes mismatch")
     if log_sha != result["validation_log_sha256"]:
         raise ConflictError("GDK validation log bytes mismatch")
+    # Large package hashing can take minutes. Reject evidence or sidecar
+    # mutation after the first read, not just a changed output filename.
+    for path, expected, label in (
+        (plan_path, plan_sha, "GDK plan"),
+        (evidence_path, evidence_sha, "GDK SDK result"),
+    ):
+        if _hash_file(path, MAX_JSON, label)[0] != expected:
+            raise ConflictError(label + " changed during intake")
+    for name, digest in inventory.items():
+        if name != filename and _hash_file(directory / name, MAX_SIDECAR, "GDK SDK sidecar")[0] != digest:
+            raise ConflictError("GDK SDK sidecar changed during intake")
     if {entry.name for entry in directory.iterdir()} != set(inventory):
         raise ConflictError("GDK output inventory changed during intake")
+    for path, label in (
+        (plan_path, "GDK plan"),
+        (evidence_path, "GDK SDK result"),
+        (package_dir, "GDK output"),
+        (validation_log, "GDK validation log"),
+    ):
+        _reject_redirected_path(path, label)
     return {
         "schema_version": 1,
         "status": "GDK_PACKAGE_BYTES_AND_SDK_RECEIPT_CHECK_PASS",

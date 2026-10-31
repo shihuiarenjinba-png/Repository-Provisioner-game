@@ -7,6 +7,8 @@ import unittest
 from unittest import mock
 
 from gdk_e2e_handoff import export_handoff
+from gdk_build_intake import EXE_SHA256
+from gdk_msixvc2_preflight import MAX_FILE_BYTES
 from gdk_e2e_handoff_verify import verify_handoff
 from package_identity_provisioner import ConflictError, PINNED_SIGNAL_SPRINT_JOB
 
@@ -45,8 +47,8 @@ class GdkE2eHandoffTests(unittest.TestCase):
             "reviewed_display_name": "Signal Sprint",
             "verified_receipt_sha256": "d" * 64,
             "staging_files_sha256": {
-                "SignalSprint.exe": "e" * 64,
-                **{f"asset{i}.png": "f" * 64 for i in range(5)},
+                name: EXE_SHA256 if name == "SignalSprint.exe" else "f" * 64
+                for name in MAX_FILE_BYTES
             },
             "sdk_command_argv_not_executed": argv,
             "sdk_required": "October 2026 GDK or later with managed makepkg.exe",

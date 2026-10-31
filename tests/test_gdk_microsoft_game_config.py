@@ -126,11 +126,181 @@ class MicrosoftGameConfigTests(unittest.TestCase):
         b = bytearray(p.read_bytes()); b[25] ^= 1; p.write_bytes(b)
         with self.assertRaisesRegex(ConflictError, "CRC"): self.build()
 
+    def test_png_unknown_critical_chunk_rejected_even_with_valid_crc(self):
+        p = self.root / "SmallLogo.png"
+        original = p.read_bytes()
+        ihdr_end = len(cfg.PNG_SIGNATURE) + 12 + 13
+        p.write_bytes(original[:ihdr_end] + chunk(b"ABCD", b"unsupported")
+                      + original[ihdr_end:])
+        with self.assertRaisesRegex(ConflictError, "unknown critical PNG chunk"):
+            self.build()
+
+    def test_png_unknown_ancillary_chunk_is_ignorable(self):
+        p = self.root / "SmallLogo.png"
+        original = p.read_bytes()
+        ihdr_end = len(cfg.PNG_SIGNATURE) + 12 + 13
+        p.write_bytes(original[:ihdr_end] + chunk(b"tEXt", b"Note\x00ok")
+                      + original[ihdr_end:])
+        self.assertEqual(self.build()["status"], "GDK_CONFIG_CHECK_ONLY")
+
+    def test_png_invalid_reserved_chunk_name_rejected(self):
+        p = self.root / "SmallLogo.png"
+        original = p.read_bytes()
+        ihdr_end = len(cfg.PNG_SIGNATURE) + 12 + 13
+        p.write_bytes(original[:ihdr_end] + chunk(b"abcz", b"test")
+                      + original[ihdr_end:])
+        with self.assertRaisesRegex(ConflictError, "invalid PNG chunk type"):
+            self.build()
+
+    def test_png_rgb_24bpp_accepted(self):
+        p = self.root / "SmallLogo.png"
+        raw = b"".join(b"\x00" + b"\x00" * (44 * 3) for _ in range(44))
+        p.write_bytes(cfg.PNG_SIGNATURE + chunk(
+            b"IHDR", struct.pack(">IIBBBBB", 44, 44, 8, 2, 0, 0, 0)
+        ) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+        self.assertEqual(self.build()["status"], "GDK_CONFIG_CHECK_ONLY")
+
+    def test_png_rgb_valid_transparency_key_accepted(self):
+        p = self.root / "SmallLogo.png"
+        raw = b"".join(b"\x00" + b"\x00" * (44 * 3) for _ in range(44))
+        p.write_bytes(cfg.PNG_SIGNATURE + chunk(
+            b"IHDR", struct.pack(">IIBBBBB", 44, 44, 8, 2, 0, 0, 0)
+        ) + chunk(b"tRNS", b"\x00\x01\x00\x02\x00\x03")
+            + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+        self.assertEqual(self.build()["status"], "GDK_CONFIG_CHECK_ONLY")
+
+    def test_png_rgba_transparency_key_rejected(self):
+        p = self.root / "SmallLogo.png"
+        original = p.read_bytes()
+        ihdr_end = len(cfg.PNG_SIGNATURE) + 12 + 13
+        p.write_bytes(original[:ihdr_end] + chunk(b"tRNS", b"\x00\x01")
+                      + original[ihdr_end:])
+        with self.assertRaisesRegex(ConflictError, "transparency chunk"):
+            self.build()
+
+    def test_png_rgb_malformed_transparency_key_rejected(self):
+        p = self.root / "SmallLogo.png"
+        raw = b"".join(b"\x00" + b"\x00" * (44 * 3) for _ in range(44))
+        p.write_bytes(cfg.PNG_SIGNATURE + chunk(
+            b"IHDR", struct.pack(">IIBBBBB", 44, 44, 8, 2, 0, 0, 0)
+        ) + chunk(b"tRNS", b"\x01\x02\x00\x03\x00\x04")
+            + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+        with self.assertRaisesRegex(ConflictError, "transparency chunk"):
+            self.build()
+
+    def test_png_rgb_transparency_key_after_idat_rejected(self):
+        p = self.root / "SmallLogo.png"
+        raw = b"".join(b"\x00" + b"\x00" * (44 * 3) for _ in range(44))
+        p.write_bytes(cfg.PNG_SIGNATURE + chunk(
+            b"IHDR", struct.pack(">IIBBBBB", 44, 44, 8, 2, 0, 0, 0)
+        ) + chunk(b"IDAT", zlib.compress(raw))
+            + chunk(b"tRNS", b"\x00\x01\x00\x02\x00\x03")
+            + chunk(b"IEND", b""))
+        with self.assertRaisesRegex(ConflictError, "transparency chunk"):
+            self.build()
+
+    def test_png_grayscale_8bit_rejected_for_gdk_pixel_format(self):
+        p = self.root / "SmallLogo.png"
+        raw = b"".join(b"\x00" + b"\x00" * 44 for _ in range(44))
+        p.write_bytes(cfg.PNG_SIGNATURE + chunk(
+            b"IHDR", struct.pack(">IIBBBBB", 44, 44, 8, 0, 0, 0, 0)
+        ) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+        with self.assertRaisesRegex(ConflictError, "8-bit RGB or RGBA"):
+            self.build()
+
+    def test_png_16bit_rgb_rejected_for_gdk_pixel_format(self):
+        p = self.root / "SmallLogo.png"
+        raw = b"".join(b"\x00" + b"\x00" * (44 * 6) for _ in range(44))
+        p.write_bytes(cfg.PNG_SIGNATURE + chunk(
+            b"IHDR", struct.pack(">IIBBBBB", 44, 44, 16, 2, 0, 0, 0)
+        ) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+        with self.assertRaisesRegex(ConflictError, "8-bit RGB or RGBA"):
+            self.build()
+
+    def test_png_grayscale_palette_rejected(self):
+        p = self.root / "SmallLogo.png"
+        raw = b"".join(b"\x00" + b"\x00" * 44 for _ in range(44))
+        p.write_bytes(cfg.PNG_SIGNATURE + chunk(
+            b"IHDR", struct.pack(">IIBBBBB", 44, 44, 8, 0, 0, 0, 0)
+        ) + chunk(b"PLTE", b"\x00\x00\x00")
+            + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+        with self.assertRaisesRegex(ConflictError, "8-bit RGB or RGBA"):
+            self.build()
+
+    def test_png_indexed_palette_over_bit_depth_rejected(self):
+        p = self.root / "SmallLogo.png"
+        raw = b"".join(b"\x00" + b"\x00" * 6 for _ in range(44))
+        p.write_bytes(cfg.PNG_SIGNATURE + chunk(
+            b"IHDR", struct.pack(">IIBBBBB", 44, 44, 1, 3, 0, 0, 0)
+        ) + chunk(b"PLTE", b"\x00\x00\x00" * 3)
+            + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+        with self.assertRaisesRegex(ConflictError, "8-bit RGB or RGBA"):
+            self.build()
+
+    def test_png_missing_idat_rejected_even_with_valid_crc(self):
+        p = self.root / "Logo.png"
+        p.write_bytes(cfg.PNG_SIGNATURE + chunk(
+            b"IHDR", struct.pack(">IIBBBBB", 150, 150, 8, 6, 0, 0, 0)
+        ) + chunk(b"IEND", b""))
+        with self.assertRaisesRegex(ConflictError, "image data"):
+            self.build()
+
+    def test_png_corrupt_deflate_rejected_even_with_valid_crc(self):
+        p = self.root / "SmallLogo.png"
+        p.write_bytes(cfg.PNG_SIGNATURE + chunk(
+            b"IHDR", struct.pack(">IIBBBBB", 44, 44, 8, 6, 0, 0, 0)
+        ) + chunk(b"IDAT", b"not a zlib stream") + chunk(b"IEND", b""))
+        with self.assertRaisesRegex(ConflictError, "compressed image"):
+            self.build()
+
+    def test_png_invalid_filter_rejected_even_with_valid_crc(self):
+        p = self.root / "SmallLogo.png"
+        raw = b"".join(b"\x05" + b"\0" * (44 * 4) for _ in range(44))
+        p.write_bytes(cfg.PNG_SIGNATURE + chunk(
+            b"IHDR", struct.pack(">IIBBBBB", 44, 44, 8, 6, 0, 0, 0)
+        ) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+        with self.assertRaisesRegex(ConflictError, "scanline filter"):
+            self.build()
+
+    def test_png_short_decompressed_image_rejected(self):
+        p = self.root / "SmallLogo.png"
+        raw = b"\0" * 100
+        p.write_bytes(cfg.PNG_SIGNATURE + chunk(
+            b"IHDR", struct.pack(">IIBBBBB", 44, 44, 8, 6, 0, 0, 0)
+        ) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+        with self.assertRaisesRegex(ConflictError, "decompressed scanlines"):
+            self.build()
+
     def test_symlink_exe_rejected(self):
         (self.root / "SignalSprint.exe").unlink()
         (self.root / "real.exe").write_bytes(self.exe)
         (self.root / "SignalSprint.exe").symlink_to(self.root / "real.exe")
         with self.assertRaisesRegex(HoldError, "linked"): self.build()
+
+    def test_symlinked_icon_rejected(self):
+        icon = self.root / "SmallLogo.png"
+        actual = self.root / "actual-small-logo.png"
+        icon.rename(actual)
+        try:
+            icon.symlink_to(actual)
+        except (OSError, NotImplementedError):
+            self.skipTest("Runner cannot create symlinks")
+        with self.assertRaisesRegex(HoldError, "symlink or junction"):
+            self.build()
+
+    def test_symlinked_staging_ancestor_rejected(self):
+        # The staging directory itself is ordinary, but its parent is a link.
+        linked_parent = self.root.parent / (self.root.name + "-linked-parent")
+        try:
+            linked_parent.symlink_to(self.root.parent, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("Runner cannot create symlinks")
+        self.addCleanup(linked_parent.unlink)
+        redirected_root = linked_parent / self.root.name
+        self.assertFalse(redirected_root.is_symlink())
+        with self.assertRaisesRegex(HoldError, "symlink or junction"):
+            cfg.prepare_config(self.intake, redirected_root, "1.0.1.0",
+                               "Signal Sprint (reviewed fixture)")
 
     def test_false_downstream_success_rejected(self):
         self.intake["real_msixvc_built"] = True

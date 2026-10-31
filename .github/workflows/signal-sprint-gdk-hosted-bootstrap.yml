@@ -1,11 +1,17 @@
 name: Signal Sprint hosted GDK SDK bootstrap (opt-in)
 
 # Push is probe-only. Installing the SDK requires an explicit manual dispatch
-# with a version pin and independently approved makepkg.exe SHA-256.
+# with a version pin. Observe-only records an unapproved SDK hash;
+# approved mode requires an independently approved makepkg.exe SHA-256.
 on:
   push:
     branches:
       - codex/game-gdk-hosted-bootstrap-20261030
+      - codex/game-gdk-cas-resume-provenance-20261030
+    paths:
+      - '.github/workflows/signal-sprint-gdk-hosted-bootstrap.yml'
+      - 'gdk_hosted_sdk_bootstrap.py'
+      - 'gdk_sdk_discovery.py'
   workflow_dispatch:
     inputs:
       install_sdk:
@@ -13,8 +19,13 @@ on:
         required: true
         type: boolean
         default: false
+      observe_only:
+        description: 'Manual ephemeral install to OBSERVE an unapproved makepkg SHA; never approve/build'
+        required: true
+        type: boolean
+        default: false
       sdk_version:
-        description: 'Exact approved October 2026 GDK 2610.x version (required for install)'
+        description: 'Exact selected October 2026 GDK 2610.x version (required for install)'
         required: false
         type: string
       approved_makepkg_sha256:
@@ -38,6 +49,7 @@ jobs:
         shell: pwsh
         env:
           INSTALL_REQUESTED: ${{ inputs.install_sdk }}
+          OBSERVE_ONLY_REQUESTED: ${{ inputs.observe_only }}
           GDK_VERSION_PIN: ${{ inputs.sdk_version }}
           APPROVED_MAKEPKG_SHA256: ${{ inputs.approved_makepkg_sha256 }}
         run: |
@@ -45,13 +57,17 @@ jobs:
           # Read-only catalog query on push; versions are candidates, never approvals.
           $arguments = @('--probe-versions')
           if ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch' -and $env:INSTALL_REQUESTED -eq 'true') {
-            $arguments = @('--install', '--sdk-version', $env:GDK_VERSION_PIN,
-                           '--approved-makepkg-sha256', $env:APPROVED_MAKEPKG_SHA256)
+            $arguments = @('--install', '--sdk-version', $env:GDK_VERSION_PIN)
+            if ($env:OBSERVE_ONLY_REQUESTED -eq 'true') {
+              $arguments += '--observe-only'
+            } else {
+              $arguments += @('--approved-makepkg-sha256', $env:APPROVED_MAKEPKG_SHA256)
+            }
           }
           python gdk_hosted_sdk_bootstrap.py @arguments |
             Tee-Object -FilePath gdk-hosted-sdk-bootstrap.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value 'Signal Sprint GDK hosted bootstrap: see JSON artifact. Version candidates are unapproved; no CAS, makepkg, Store or install/GUI QA.'
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value 'Signal Sprint GDK hosted bootstrap: see JSON artifact. Observed SDK digests are unapproved until independently reviewed; no CAS, makepkg, Store or install/GUI QA.'
       - name: Preserve read-only or approved-install evidence
         if: always()
         uses: actions/upload-artifact@v4

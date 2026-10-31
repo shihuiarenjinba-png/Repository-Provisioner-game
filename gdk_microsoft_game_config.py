@@ -39,18 +39,34 @@ def _sha(path: Path) -> str:
     return h.hexdigest()
 
 
+def _reject_redirected_path(path: Path, label: str) -> None:
+    """Reject linked ancestors as well as linked leaf files in GDK staging."""
+    for component in (path, *path.parents):
+        try:
+            if (component.is_symlink()
+                    or getattr(component, "is_junction", lambda: False)()):
+                raise HoldError(label + " linked path (symlink or junction)")
+        except (OSError, RuntimeError) as exc:
+            raise HoldError(label + " path cannot be inspected") from exc
+
+
 def _regular_file(path: Path, max_size: int) -> None:
-    if path.is_symlink() or not path.is_file() or not 0 < path.stat().st_size <= max_size:
+    _reject_redirected_path(path, "GDK staging input")
+    if not path.is_file() or not 0 < path.stat().st_size <= max_size:
         raise HoldError("GDK staging input missing, linked, empty or oversized: " + path.name)
 
 
 def _png_dimensions(path: Path) -> tuple[int, int]:
     _regular_file(path, 20_000_000)
-    # CRC-check every chunk, not just the PNG signature. Not a full image decode.
+    # Validate PNG chunk order, CRC, compressed scanlines and filter bytes.
+    # Checking only IHDR and CRC allows completely undecodable artwork to
+    # pass the staging gate and fail later in the actual GDK packaging step.
     data = path.read_bytes()
     if not data.startswith(PNG_SIGNATURE):
         raise ConflictError("GDK icon is not PNG: " + path.name)
     cursor, dims, ended = len(PNG_SIGNATURE), None, False
+    idat, seen_idat, idat_ended, palette, transparency = [], False, False, False, False
+    bit_depth = color_type = interlace = None
     while cursor < len(data):
         if len(data) - cursor < 12:
             raise ConflictError("GDK icon truncated: " + path.name)
@@ -63,18 +79,93 @@ def _png_dimensions(path: Path) -> tuple[int, int]:
         crc = struct.unpack(">I", data[cursor+8+size:end])[0]
         if zlib.crc32(tag + chunk) != crc:
             raise ConflictError("GDK icon PNG CRC mismatch: " + path.name)
+        # PNG chunk names are ASCII letters and the third (reserved) byte
+        # must be uppercase. Unknown *critical* chunks cannot be ignored:
+        # accepting one would claim artwork is decodable without interpreting
+        # mandatory rendering instructions.
+        if (any(not (65 <= letter <= 90 or 97 <= letter <= 122) for letter in tag)
+                or not 65 <= tag[2] <= 90):
+            raise ConflictError("GDK icon invalid PNG chunk type: " + path.name)
+        if tag not in (b"IHDR", b"PLTE", b"IDAT", b"IEND") and not (tag[0] & 0x20):
+            raise ConflictError("GDK icon unknown critical PNG chunk: " + path.name)
         if cursor == 8:
             if tag != b"IHDR" or size != 13:
                 raise ConflictError("GDK icon missing PNG IHDR: " + path.name)
-            dims = struct.unpack(">II", chunk[:8])
+            width, height, bit_depth, color_type, compression, filtering, interlace = (
+                struct.unpack(">IIBBBBB", chunk))
+            if (not 0 < width <= 1920 or not 0 < height <= 1080
+                    or compression != 0 or filtering != 0 or interlace not in (0, 1)
+                    or bit_depth not in {0: (1, 2, 4, 8, 16), 2: (8, 16),
+                                         3: (1, 2, 4, 8), 4: (8, 16),
+                                         6: (8, 16)}.get(color_type, ())):
+                raise ConflictError("GDK icon invalid PNG IHDR: " + path.name)
+            # Microsoft GDK SubmissionValidator accepts 24-bpp RGB or
+            # 32-bpp RGBA/PARGB artwork. A valid grayscale, indexed, or
+            # 16-bit PNG can pass structural/CRC checks but fail packaging.
+            # Enforce the retail pixel-format contract before staging.
+            if bit_depth != 8 or color_type not in (2, 6):
+                raise ConflictError("GDK icon requires 8-bit RGB or RGBA PNG: " + path.name)
+            dims = (width, height)
+        elif tag == b"IHDR":
+            raise ConflictError("GDK icon duplicate PNG IHDR: " + path.name)
+        if tag == b"PLTE":
+            if (seen_idat or palette or size == 0 or size % 3 or size > 768
+                    or color_type in (0, 4)
+                    or (color_type == 3 and size // 3 > (1 << bit_depth))):
+                raise ConflictError("GDK icon invalid PNG palette: " + path.name)
+            palette = True
+        elif tag == b"tRNS":
+            # PNG transparency keys are valid for RGB, but forbidden for RGBA.
+            # For 8-bit RGB, tRNS contains three 16-bit samples whose high
+            # bytes must be zero. CRC-correct malformed metadata must not
+            # pass the GDK staging gate as validated artwork.
+            if (transparency or seen_idat or color_type != 2 or size != 6
+                    or any(chunk[index] != 0 for index in (0, 2, 4))):
+                raise ConflictError("GDK icon invalid PNG transparency chunk: " + path.name)
+            transparency = True
+        elif tag == b"IDAT":
+            if idat_ended:
+                raise ConflictError("GDK icon noncontiguous PNG IDAT: " + path.name)
+            seen_idat = True
+            idat.append(chunk)
+        elif seen_idat:
+            idat_ended = True
         if tag == b"IEND":
             if size or end != len(data):
                 raise ConflictError("GDK icon malformed PNG end: " + path.name)
             ended = True
             break
         cursor = end
-    if not ended or dims is None:
-        raise ConflictError("GDK icon PNG end missing: " + path.name)
+    if not ended or dims is None or not seen_idat or (color_type == 3 and not palette):
+        raise ConflictError("GDK icon PNG image data/end missing: " + path.name)
+
+    # Check the actual zlib stream, not just the CRC of the compressed bytes.
+    # Bound decompression to the exact PNG scanline budget (including Adam7).
+    channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[color_type]
+    passes = ((0, 0, 1, 1),) if interlace == 0 else (
+        (0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4),
+        (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2))
+    rows = []
+    for x, y, dx, dy in passes:
+        w = max(0, (dims[0] - x + dx - 1) // dx)
+        h = max(0, (dims[1] - y + dy - 1) // dy)
+        if w and h:
+            rows.extend([1 + (w * channels * bit_depth + 7) // 8] * h)
+    expected = sum(rows)
+    try:
+        decoder = zlib.decompressobj()
+        raw = decoder.decompress(b"".join(idat), expected + 1)
+        if len(raw) <= expected:
+            raw += decoder.flush(expected + 1 - len(raw))
+    except (zlib.error, ValueError) as exc:
+        raise ConflictError("GDK icon invalid PNG compressed image: " + path.name) from exc
+    if len(raw) != expected or not decoder.eof or decoder.unused_data or decoder.unconsumed_tail:
+        raise ConflictError("GDK icon PNG decompressed scanlines invalid: " + path.name)
+    pos = 0
+    for row_bytes in rows:
+        if raw[pos] > 4:
+            raise ConflictError("GDK icon PNG invalid scanline filter: " + path.name)
+        pos += row_bytes
     return dims
 
 
@@ -118,15 +209,19 @@ def prepare_config(intake: dict, asset_root: Path, package_version: str, reviewe
     _validate_intake(intake)
     version = _reviewed_version(package_version)
     display = _reviewed_display(reviewed_display_name)
-    if asset_root.is_symlink() or not asset_root.is_dir():
+    _reject_redirected_path(asset_root, "GDK staging root")
+    if not asset_root.is_dir():
         raise HoldError("GDK staging content directory is unavailable or linked")
     exe = asset_root / "SignalSprint.exe"
     _regular_file(exe, 40_000_000)
     if _sha(exe) != EXE_SHA256:
         raise ConflictError("GDK staged EXE differs from immutable artifact bytes")
+    _reject_redirected_path(exe, "GDK staged EXE")
     for _, (name, dims) in ASSETS.items():
-        if _png_dimensions(asset_root / name) != dims:
+        icon = asset_root / name
+        if _png_dimensions(icon) != dims:
             raise ConflictError("GDK icon dimensions mismatch: " + name)
+        _reject_redirected_path(icon, "GDK staged icon")
 
     identity = PINNED_SIGNAL_SPRINT_GDK_IDENTITY
     game = ET.Element("Game", {"configVersion": "1"})
@@ -192,6 +287,7 @@ def main(argv=None) -> int:
         if args.write_staging_config:
             target = args.asset_root / "MicrosoftGame.config"
             # Exclusive creation only; never overwrite an existing config.
+            _reject_redirected_path(target, "GDK config destination")
             with target.open("xb") as output:
                 output.write(result["microsoft_game_config_xml"].encode("utf-8"))
             result["config_path"] = str(target)

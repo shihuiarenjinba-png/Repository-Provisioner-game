@@ -6,8 +6,11 @@ ancestry before trusting the immutable EXE artifact.
 """
 from __future__ import annotations
 
+from gdk_provenance_timestamp import require_valid_provided_at
+
 import argparse
 import hashlib
+import io
 import json
 from pathlib import Path
 import re
@@ -38,6 +41,23 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _reject_redirected_artifact_path(path: Path) -> None:
+    """Reject symlink/junction ancestors as well as a redirected ZIP leaf.
+
+    The pinned digest authenticates bytes, but a linked parent can redirect
+    the later SDK consumer to a different storage root. This check is repeated
+    around both reads; it does not replace owner-managed trusted storage.
+    """
+    for component in (path, *path.parents):
+        try:
+            linked = component.is_symlink()
+            junction = getattr(component, "is_junction", lambda: False)()
+        except (OSError, RuntimeError) as exc:
+            raise HoldError("Pinned GDK artifact path cannot be inspected") from exc
+        if linked or junction:
+            raise ConflictError("Pinned GDK artifact path contains symlink or junction")
+
+
 def _json(data: bytes) -> dict:
     try:
         value = json.loads(data.decode("utf-8"), object_pairs_hook=_unique_json_object)
@@ -59,6 +79,23 @@ def _git(repo: Path, *args: str) -> bytes:
     return result.stdout.strip()
 
 
+def _changed_paths(repo: Path, commit: str) -> list[bytes]:
+    """Read literal NUL-delimited Git paths; never trust quoted display names.
+
+    Without -z, Git C-quotes paths containing non-ASCII/control characters.
+    The leading quote hides a products/ prefix from naive startswith checks.
+    """
+    raw = _git(repo, "diff-tree", "--no-commit-id", "--name-only", "-z", "-r", commit)
+    if not raw:
+        return []
+    if not raw.endswith(b"\x00"):
+        raise ConflictError("GDK Git changed-path inventory is malformed")
+    paths = raw[:-1].split(b"\x00")
+    if any(not path for path in paths):
+        raise ConflictError("GDK Git changed-path inventory contains an empty path")
+    return paths
+
+
 def verify_cas_checkout(repo: Path, cas_sha: str, build_sha: str) -> dict:
     source = PINNED_SIGNAL_SPRINT_JOB["source_sha"]
     if (not isinstance(cas_sha, str) or not SHA40.fullmatch(cas_sha)
@@ -78,8 +115,17 @@ def verify_cas_checkout(repo: Path, cas_sha: str, build_sha: str) -> dict:
     branch = _git(repo, "symbolic-ref", "--short", "HEAD").decode()
     if not BUILD_BRANCH.fullmatch(branch):
         raise ConflictError("GDK build branch name violates dedicated Factory contract")
-    if _git(repo, "status", "--porcelain"):
+    if _git(repo, "status", "--porcelain", "--untracked-files=all"):
         raise ConflictError("GDK build checkout is dirty")
+    # The declared CAS must still be the HEAD of the dedicated Identity-only
+    # return branch. A locally fabricated commit with the right parent and
+    # payload is not evidence that the reviewed CAS return actually landed.
+    cas_ref = "refs/heads/codex/game-signal-sprint-gdk-cas-" + source[:12]
+    if _git(repo, "rev-parse", cas_ref).decode() != cas_sha:
+        raise ConflictError("GDK dedicated CAS branch does not match declared CAS SHA")
+    build_ref = "refs/heads/" + branch
+    if _git(repo, "rev-parse", build_ref).decode() != build_sha:
+        raise ConflictError("GDK dedicated build branch moved before verification")
     # CAS must have exactly one parent; a merge with source as first parent
     # is not an atomic Identity-only CAS.
     if _git(repo, "rev-list", "--parents", "-n", "1", cas_sha).decode().split() != [cas_sha, source]:
@@ -87,9 +133,15 @@ def verify_cas_checkout(repo: Path, cas_sha: str, build_sha: str) -> dict:
     _git(repo, "merge-base", "--is-ancestor", cas_sha, build_sha)
     # The atomic CAS must change only the reviewed Identity file, not product
     # source. A later build-branch commit must not replace that Identity.
-    changed = _git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", cas_sha)
-    if changed.decode("utf-8") != APPROVED_PATH:
+    changed = _changed_paths(repo, cas_sha)
+    if changed != [APPROVED_PATH.encode("utf-8")]:
         raise ConflictError("GDK CAS commit changed files outside approved Identity")
+    # Compare Git blob identities, not only parsed JSON. Reformatting or
+    # changing trailing whitespace must not silently replace reviewed bytes.
+    cas_blob = _git(repo, "rev-parse", cas_sha + ":" + APPROVED_PATH)
+    build_blob = _git(repo, "rev-parse", build_sha + ":" + APPROVED_PATH)
+    if cas_blob != build_blob:
+        raise ConflictError("GDK build HEAD changed approved CAS Identity bytes")
     approved_bytes = _git(repo, "show", cas_sha + ":" + APPROVED_PATH)
     approved = _json(approved_bytes)
     if _json(_git(repo, "show", build_sha + ":" + APPROVED_PATH)) != approved:
@@ -110,10 +162,7 @@ def verify_cas_checkout(repo: Path, cas_sha: str, build_sha: str) -> dict:
     for field, expected in fixed.items():
         if type(approved.get(field)) is not type(expected) or approved[field] != expected:
             raise ConflictError("GDK approved CAS payload mismatch: " + field)
-    if not isinstance(approved["provided_at"], str) or not re.fullmatch(
-            r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,6})?(?:Z|[+-]\d\d:\d\d)",
-            approved["provided_at"]):
-        raise ConflictError("GDK approved Identity provenance timestamp invalid")
+    require_valid_provided_at(approved.get("provided_at"), label="GDK approved Identity provenance timestamp")
     if type(approved["signature_status"]) is not str or approved["signature_status"] != "QA_UNSIGNED":
         raise ConflictError("GDK pinned EXE signature provenance must remain QA_UNSIGNED")
     # A final-tree comparison alone misses edit-then-revert attacks. Inspect
@@ -124,20 +173,36 @@ def verify_cas_checkout(repo: Path, cas_sha: str, build_sha: str) -> dict:
         parents = _git(repo, "rev-list", "--parents", "-n", "1", commit).decode().split()
         if len(parents) != 2 or parents[0] != commit:
             raise ConflictError("GDK post-CAS merge or malformed commit requires review")
-        changed = _git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", commit)
-        for path in changed.decode("utf-8").splitlines():
-            if path.startswith("products/") or path == APPROVED_PATH:
+        for path in _changed_paths(repo, commit):
+            if path.startswith(b"products/") or path == APPROVED_PATH.encode("utf-8"):
                 raise ConflictError("GDK post-CAS product change in history")
+    # Re-read all three refs after the expensive ancestry/content checks. A
+    # branch update during verification must not produce a stale PASS receipt.
+    if _git(repo, "rev-parse", source_ref).decode() != source:
+        raise ConflictError("GDK immutable source branch moved during build verification")
+    if _git(repo, "rev-parse", cas_ref).decode() != cas_sha:
+        raise ConflictError("GDK dedicated CAS branch moved during build verification")
+    if (_git(repo, "rev-parse", build_ref).decode() != build_sha
+            or _git(repo, "rev-parse", "HEAD").decode() != build_sha
+            or _git(repo, "symbolic-ref", "--short", "HEAD").decode() != branch):
+        raise ConflictError("GDK dedicated build branch moved during verification")
+    if _git(repo, "status", "--porcelain", "--untracked-files=all"):
+        raise ConflictError("GDK build checkout changed during verification")
     return approved
 
 
 def inspect_pinned_artifact(path: Path) -> dict:
-    if (path.is_symlink() or not path.is_file() or not 0 < path.stat().st_size < 100_000_000):
+    _reject_redirected_artifact_path(path)
+    if (not path.is_file() or not 0 < path.stat().st_size < 100_000_000):
         raise HoldError("Pinned GDK EXE artifact missing, linked or oversized")
-    if _sha256(path.read_bytes()) != ARTIFACT_SHA256:
+    # Hash and parse one immutable in-memory snapshot. Opening the path again
+    # after the first digest could otherwise consume a different ZIP.
+    snapshot = path.read_bytes()
+    _reject_redirected_artifact_path(path)
+    if _sha256(snapshot) != ARTIFACT_SHA256:
         raise ConflictError("Pinned GDK artifact ZIP bytes changed")
     try:
-        with zipfile.ZipFile(path) as archive:
+        with zipfile.ZipFile(io.BytesIO(snapshot)) as archive:
             members = archive.infolist()
             if {m.filename for m in members} != {
                     "SignalSprint.exe", "provenance.json", "provisioner-request.json"} or len(members) != 3:
@@ -153,6 +218,16 @@ def inspect_pinned_artifact(path: Path) -> dict:
             request = _json(archive.read("provisioner-request.json"))
     except (zipfile.BadZipFile, OSError, RuntimeError, EOFError) as exc:
         raise ConflictError("Pinned GDK artifact is invalid") from exc
+    # The snapshot is trustworthy, but downstream stages also receive the
+    # path. Reject a swap during inspection instead of returning a stale PASS.
+    try:
+        _reject_redirected_artifact_path(path)
+        if (not path.is_file()
+                or _sha256(path.read_bytes()) != ARTIFACT_SHA256):
+            raise ConflictError("Pinned GDK artifact changed during verification")
+        _reject_redirected_artifact_path(path)
+    except OSError as exc:
+        raise HoldError("Pinned GDK artifact unavailable during verification") from exc
     if _sha256(exe) != EXE_SHA256:
         raise ConflictError("Pinned GDK EXE SHA changed")
     for record in (provenance, request):

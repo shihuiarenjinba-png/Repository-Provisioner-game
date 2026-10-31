@@ -4,8 +4,13 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
+
+import gdk_sdk_result_intake as sdk_intake
 
 from gdk_sdk_result_intake import intake
+from gdk_build_intake import EXE_SHA256
+from gdk_msixvc2_preflight import MAX_FILE_BYTES
 from package_identity_provisioner import ConflictError, PINNED_SIGNAL_SPRINT_JOB
 
 
@@ -36,8 +41,10 @@ class GdkSdkResultIntakeTests(unittest.TestCase):
             "cas_commit_sha": "b" * 40, "factory_head_sha": "c" * 40,
             "package_version": "1.0.1.0", "reviewed_display_name": "Signal Sprint",
             "verified_receipt_sha256": "d" * 64,
-            "staging_files_sha256": {"SignalSprint.exe": "e" * 64,
-                                      **{f"asset{i}.png": "f" * 64 for i in range(5)}},
+            "staging_files_sha256": {
+                name: EXE_SHA256 if name == "SignalSprint.exe" else "f" * 64
+                for name in MAX_FILE_BYTES
+            },
             "sdk_command_argv_not_executed": argv,
             "sdk_required": "October 2026 GDK or later with managed makepkg.exe",
             "msixvc2_preview_public_certification_blocked": False,
@@ -92,6 +99,69 @@ class GdkSdkResultIntakeTests(unittest.TestCase):
     def test_changed_validation_log_rejected(self):
         self.log_path.write_bytes(b"tampered")
         with self.assertRaisesRegex(ConflictError, "validation log bytes"):
+            self.check()
+
+    def test_plan_rewritten_during_large_package_hash_rejected(self):
+        self.plan_path.write_text(json.dumps(self.plan))
+        self.evidence_path.write_text(json.dumps(self.evidence))
+        original_hash = sdk_intake._hash_file
+
+        def rewrite_after_package(path, *args):
+            value = original_hash(path, *args)
+            if Path(path) == self.package:
+                # Still valid JSON, but not the bytes actually reviewed.
+                self.plan_path.write_bytes(self.plan_path.read_bytes() + b" ")
+            return value
+
+        with patch.object(sdk_intake, "_hash_file", side_effect=rewrite_after_package):
+            with self.assertRaisesRegex(ConflictError, "GDK plan changed during intake"):
+                intake(self.plan_path, self.evidence_path, self.output, self.log_path)
+
+    def test_sdk_result_rewritten_during_large_package_hash_rejected(self):
+        self.plan_path.write_text(json.dumps(self.plan))
+        self.evidence_path.write_text(json.dumps(self.evidence))
+        original_hash = sdk_intake._hash_file
+
+        def rewrite_after_package(path, *args):
+            value = original_hash(path, *args)
+            if Path(path) == self.package:
+                self.evidence_path.write_bytes(self.evidence_path.read_bytes() + b" ")
+            return value
+
+        with patch.object(sdk_intake, "_hash_file", side_effect=rewrite_after_package):
+            with self.assertRaisesRegex(ConflictError, "GDK SDK result changed during intake"):
+                intake(self.plan_path, self.evidence_path, self.output, self.log_path)
+
+    def test_sidecar_rewritten_during_large_package_hash_rejected(self):
+        sidecar = self.output / "SubmissionValidator.xml"
+        sidecar.write_bytes(b"<reviewed/>")
+        self.evidence["output_files_sha256"][sidecar.name] = sha(sidecar.read_bytes())
+        self.plan_path.write_text(json.dumps(self.plan))
+        self.evidence_path.write_text(json.dumps(self.evidence))
+        original_hash = sdk_intake._hash_file
+
+        def rewrite_after_package(path, *args):
+            value = original_hash(path, *args)
+            if Path(path) == self.package:
+                sidecar.write_bytes(b"<modified/>")
+            return value
+
+        with patch.object(sdk_intake, "_hash_file", side_effect=rewrite_after_package):
+            with self.assertRaisesRegex(ConflictError, "GDK SDK sidecar changed during intake"):
+                intake(self.plan_path, self.evidence_path, self.output, self.log_path)
+
+    def test_unreviewed_staging_filename_rejected(self):
+        # A plan and SDK result can agree on an unreviewed filename; intake
+        # must still reject it independently of the earlier pack-plan gate.
+        hashes = self.plan["staging_files_sha256"]
+        hashes["unreviewed.dat"] = hashes.pop("MicrosoftGame.config")
+        with self.assertRaisesRegex(ConflictError, "staging hashes"):
+            self.check()
+
+    def test_substituted_executable_digest_rejected(self):
+        # Both receipts still agree, but the immutable Factory EXE pin differs.
+        self.plan["staging_files_sha256"]["SignalSprint.exe"] = "0" * 64
+        with self.assertRaisesRegex(ConflictError, "immutable executable"):
             self.check()
 
     def test_wrong_source_rejected(self):
@@ -206,6 +276,36 @@ class GdkSdkResultIntakeTests(unittest.TestCase):
         with self.assertRaisesRegex(ConflictError, "escapes|linked"):
             self.check()
 
+    def test_symlinked_output_parent_rejected(self):
+        alias = self.output.parent / "output-alias"
+        try:
+            alias.symlink_to(self.output.parent, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("directory symlink creation unavailable")
+        self.output = alias / "output"
+        with self.assertRaisesRegex(ConflictError, "GDK output contains symlink or junction"):
+            self.check()
+
+    def test_symlinked_validation_log_parent_rejected(self):
+        alias = self.log_path.parent / "log-alias"
+        try:
+            alias.symlink_to(self.log_path.parent, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("directory symlink creation unavailable")
+        self.log_path = alias / "validation.log"
+        with self.assertRaisesRegex(ConflictError, "GDK validation log contains symlink or junction"):
+            self.check()
+
+    def test_symlinked_plan_parent_rejected(self):
+        alias = self.plan_path.parent / "plan-alias"
+        try:
+            alias.symlink_to(self.plan_path.parent, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("directory symlink creation unavailable")
+        self.plan_path = alias / "plan.json"
+        with self.assertRaisesRegex(ConflictError, "GDK plan contains symlink or junction"):
+            self.check()
+
     def test_plan_cannot_claim_sdk_success(self):
         self.plan["real_msixvc_built"] = True
         with self.assertRaisesRegex(ConflictError, "real_msixvc_built"):
@@ -223,6 +323,36 @@ class GdkSdkResultIntakeTests(unittest.TestCase):
         self.evidence["sdk_command_argv"] = changed
         with self.assertRaisesRegex(ConflictError, "output directory"):
             self.check()
+
+
+    def test_shared_hash_file_accepts_regular_trusted_anchor(self):
+        digest, size = sdk_intake._hash_file(
+            self.log_path, sdk_intake.MAX_LOG, "GDK trusted anchor")
+        self.assertEqual(digest, sha(self.log_path.read_bytes()))
+        self.assertEqual(size, self.log_path.stat().st_size)
+
+    def test_shared_hash_file_rejects_linked_trusted_anchor(self):
+        alias = self.output / "anchor.log"
+        try:
+            alias.symlink_to(self.log_path)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlink creation unavailable on this runner")
+        with self.assertRaisesRegex(ConflictError, "contains symlink or junction"):
+            sdk_intake._hash_file(
+                alias, sdk_intake.MAX_LOG, "GDK trusted anchor")
+
+    def test_shared_hash_file_rejects_linked_parent_of_trusted_anchor(self):
+        # trusted_intake calls _hash_file before _read_json. An independently
+        # pinned digest must not permit a linked parent in that first read.
+        alias_dir = self.output.parent / "trusted-alias"
+        try:
+            alias_dir.symlink_to(self.output.parent, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("directory symlink creation unavailable on this runner")
+        with self.assertRaisesRegex(ConflictError, "contains symlink or junction"):
+            sdk_intake._hash_file(
+                alias_dir / self.log_path.name, sdk_intake.MAX_LOG,
+                "GDK trusted anchor")
 
 
 if __name__ == "__main__":

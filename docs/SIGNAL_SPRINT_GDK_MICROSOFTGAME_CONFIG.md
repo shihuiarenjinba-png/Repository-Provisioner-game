@@ -24,7 +24,7 @@ Read-only command:
 
     python gdk_microsoft_game_config.py --factory-checkout PATH_TO_POST_CAS_FACTORY --pinned-artifact-zip PATH_TO_ORIGINAL_ZIP --cas-commit-sha ACTUAL_CAS_SHA --build-head-sha ACTUAL_BUILD_SHA --asset-root PATH_TO_STAGING --package-version REVIEWED_A.B.C.0 --reviewed-display-name "REVIEWED_DISPLAY_NAME"
 
-This produces machine-readable JSON with MicrosoftGame.config XML, XML SHA-256, separate source/CAS/build SHAs, and GDK_CONFIG_CHECK_ONLY. It refuses changed EXE bytes, wrong Identity, invalid version, missing/corrupt/wrong-size icons, and missing reviewed display name. PNG CRC/dimensions are checked; full image decode and GDK SDK validation are not claimed.
+This produces machine-readable JSON with MicrosoftGame.config XML, XML SHA-256, separate source/CAS/build SHAs, and GDK_CONFIG_CHECK_ONLY. It refuses changed EXE bytes, wrong Identity, invalid version, missing/corrupt/wrong-size icons, and missing reviewed display name. PNG dimensions, chunk CRC/order, IDAT zlib stream completeness, decompressed scanline lengths and filter-byte ranges are checked; full pixel reconstruction, visual quality, and GDK SDK validation are not claimed. A CRC-valid PNG with missing IDAT, invalid deflate data, truncated scanlines or illegal filter bytes is rejected before staging.
 
 After manual review, optionally add --write-staging-config to exclusively create a new MicrosoftGame.config in the staging folder. Existing files are not overwritten. The immutable Factory source, Windows-all-auto queue, and central E2E ledger are not edited.
 

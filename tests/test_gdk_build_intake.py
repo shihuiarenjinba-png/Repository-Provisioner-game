@@ -62,22 +62,31 @@ class GdkBuildIntakeTests(unittest.TestCase):
         self.calls.append(args)
         if args == ("rev-parse", "refs/heads/" + PINNED_SIGNAL_SPRINT_JOB["source_branch"]):
             return SOURCE.encode()
+        if args == ("rev-parse", "refs/heads/codex/game-signal-sprint-gdk-cas-" + SOURCE[:12]):
+            return CAS.encode()
+        if args == ("rev-parse", "refs/heads/codex/game-signal-sprint-gdk-build-fixture"):
+            return BUILD.encode()
         if args == ("rev-list", "--parents", "-n", "1", CAS):
             return (CAS + " " + SOURCE).encode()
         if args == ("rev-parse", "HEAD"):
             return BUILD.encode()
         if args == ("symbolic-ref", "--short", "HEAD"):
             return b"codex/game-signal-sprint-gdk-build-fixture"
-        if args == ("status", "--porcelain"):
+        if args in (("status", "--porcelain"),
+                    ("status", "--porcelain", "--untracked-files=all")):
             return b""
         if args == ("rev-list", "--reverse", CAS + ".." + BUILD):
             return b""
+        if args == ("rev-parse", CAS + ":" + intake.APPROVED_PATH):
+            return ("e" * 40).encode()
+        if args == ("rev-parse", BUILD + ":" + intake.APPROVED_PATH):
+            return ("e" * 40).encode()
         if args == ("rev-parse", CAS + "^"):
             return SOURCE.encode()
         if args == ("merge-base", "--is-ancestor", CAS, BUILD):
             return b""
-        if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", CAS):
-            return intake.APPROVED_PATH.encode()
+        if args == ("diff-tree", "--no-commit-id", "--name-only", "-z", "-r", CAS):
+            return intake.APPROVED_PATH.encode() + b"\x00"
         if args in (("show", CAS + ":" + intake.APPROVED_PATH),
                     ("show", BUILD + ":" + intake.APPROVED_PATH)):
             return json.dumps(self.approved).encode()
@@ -144,10 +153,77 @@ class GdkBuildIntakeTests(unittest.TestCase):
         with self.assertRaisesRegex(ConflictError, "CAS/build SHA"):
             intake.create_intake(self.root, self.zip, SOURCE, BUILD)
 
+    def test_pinned_artifact_linked_parent_rejected(self):
+        # A valid ZIP under a redirected ancestor must not be trusted by
+        # Provisioner even when the original digest is unchanged.
+        parent = self.root / "redirected-parent"
+        parent.mkdir()
+        artifact = parent / "pinned.zip"
+        artifact.write_bytes(self.zip.read_bytes())
+        original = Path.is_symlink
+
+        def linked_parent(path):
+            return path == parent or original(path)
+
+        with patch.object(Path, "is_symlink", linked_parent):
+            with self.assertRaisesRegex(ConflictError, "symlink or junction"):
+                intake.inspect_pinned_artifact(artifact)
+
+    def test_pinned_artifact_linked_leaf_rejected(self):
+        original = Path.is_symlink
+
+        def linked_leaf(path):
+            return path == self.zip or original(path)
+
+        with patch.object(Path, "is_symlink", linked_leaf):
+            with self.assertRaisesRegex(ConflictError, "symlink or junction"):
+                intake.inspect_pinned_artifact(self.zip)
+
+    def test_pinned_artifact_parent_redirected_after_snapshot_rejected(self):
+        # Catch a path redirect appearing after the first verified ZIP read.
+        parent = self.root / "late-parent"
+        parent.mkdir()
+        artifact = parent / "pinned.zip"
+        artifact.write_bytes(self.zip.read_bytes())
+        original = Path.is_symlink
+        calls = 0
+
+        def redirected_late(path):
+            nonlocal calls
+            if path == parent:
+                calls += 1
+                return calls >= 2
+            return original(path)
+
+        with patch.object(Path, "is_symlink", redirected_late):
+            with self.assertRaisesRegex(ConflictError, "symlink or junction"):
+                intake.inspect_pinned_artifact(artifact)
+        self.assertGreaterEqual(calls, 2)
+
     def test_pinned_artifact_byte_tampering_rejected(self):
         self.zip.write_bytes(self.zip.read_bytes() + b"tamper")
         with self.assertRaisesRegex(ConflictError, "ZIP bytes changed"):
             intake.create_intake(self.root, self.zip, CAS, BUILD)
+
+    def test_pinned_zip_swap_after_first_hash_is_rejected(self):
+        # An alternate ZIP can have the same members/EXE/JSON and valid CRC,
+        # yet different bytes. The original pinned ZIP digest must still win.
+        original_read = Path.read_bytes
+        swaps = 0
+
+        def swap_after_snapshot(path):
+            nonlocal swaps
+            data = original_read(path)
+            if path == self.zip and swaps == 0:
+                swaps += 1
+                with zipfile.ZipFile(self.zip, "a") as archive:
+                    archive.comment = b"unapproved-zip-comment"
+            return data
+
+        with patch.object(Path, "read_bytes", swap_after_snapshot):
+            with self.assertRaisesRegex(ConflictError, "changed during verification"):
+                intake.create_intake(self.root, self.zip, CAS, BUILD)
+        self.assertEqual(swaps, 1)
 
     def test_extra_zip_member_rejected_even_with_new_digest(self):
         self.make_zip(extra=True)
@@ -183,12 +259,24 @@ class GdkBuildIntakeTests(unittest.TestCase):
         original = self.fake_git
 
         def wrong_files(repo, *args):
-            if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", CAS):
-                return (intake.APPROVED_PATH + "\\nproducts/signal-sprint/main.py").encode()
+            if args == ("diff-tree", "--no-commit-id", "--name-only", "-z", "-r", CAS):
+                return (intake.APPROVED_PATH + "\x00products/signal-sprint/main.py\x00").encode()
             return original(repo, *args)
 
         with patch.object(intake, "_git", side_effect=wrong_files):
             with self.assertRaisesRegex(ConflictError, "outside approved Identity"):
+                intake.create_intake(self.root, self.zip, CAS, BUILD)
+
+    def test_build_branch_cannot_reformat_approved_identity_bytes(self):
+        original = self.fake_git
+
+        def changed_blob(repo, *args):
+            if args == ("rev-parse", BUILD + ":" + intake.APPROVED_PATH):
+                return ("f" * 40).encode()
+            return original(repo, *args)
+
+        with patch.object(intake, "_git", side_effect=changed_blob):
+            with self.assertRaisesRegex(ConflictError, "Identity bytes"):
                 intake.create_intake(self.root, self.zip, CAS, BUILD)
 
     def test_build_branch_cannot_change_approved_identity(self):
@@ -243,7 +331,7 @@ class GdkBuildIntakeTests(unittest.TestCase):
         original = self.fake_git
 
         def dirty(repo, *args):
-            if args == ("status", "--porcelain"):
+            if args == ("status", "--porcelain", "--untracked-files=all"):
                 return b"?? untracked-file"
             return original(repo, *args)
 
@@ -272,12 +360,59 @@ class GdkBuildIntakeTests(unittest.TestCase):
                 return (changed + "\n" + reverted).encode()
             if args == ("rev-list", "--parents", "-n", "1", changed):
                 return (changed + " " + CAS).encode()
-            if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", changed):
-                return b"products/signal-sprint/main.py"
+            if args == ("diff-tree", "--no-commit-id", "--name-only", "-z", "-r", changed):
+                return b"products/signal-sprint/main.py\x00"
             return original(repo, *args)
 
         with patch.object(intake, "_git", side_effect=tamper_history):
             with self.assertRaisesRegex(ConflictError, "product change in history"):
+                intake.create_intake(self.root, self.zip, CAS, BUILD)
+
+    def test_post_cas_non_ascii_product_filename_rejected(self):
+        # Without -z Git quotes non-ASCII names, obscuring products/ prefix.
+        original = self.fake_git
+        changed = "c" * 40
+
+        def unicode_history(repo, *args):
+            if args == ("rev-list", "--reverse", CAS + ".." + BUILD):
+                return changed.encode()
+            if args == ("rev-list", "--parents", "-n", "1", changed):
+                return (changed + " " + CAS).encode()
+            if args == ("diff-tree", "--no-commit-id", "--name-only", "-z", "-r", changed):
+                return "products/signal-sprint/日本語.txt\x00".encode()
+            return original(repo, *args)
+
+        with patch.object(intake, "_git", side_effect=unicode_history):
+            with self.assertRaisesRegex(ConflictError, "product change in history"):
+                intake.create_intake(self.root, self.zip, CAS, BUILD)
+
+    def test_post_cas_newline_product_filename_rejected(self):
+        original = self.fake_git
+        changed = "c" * 40
+
+        def newline_history(repo, *args):
+            if args == ("rev-list", "--reverse", CAS + ".." + BUILD):
+                return changed.encode()
+            if args == ("rev-list", "--parents", "-n", "1", changed):
+                return (changed + " " + CAS).encode()
+            if args == ("diff-tree", "--no-commit-id", "--name-only", "-z", "-r", changed):
+                return b"products/signal-sprint/line\nname.txt\x00"
+            return original(repo, *args)
+
+        with patch.object(intake, "_git", side_effect=newline_history):
+            with self.assertRaisesRegex(ConflictError, "product change in history"):
+                intake.create_intake(self.root, self.zip, CAS, BUILD)
+
+    def test_malformed_git_path_inventory_rejected(self):
+        original = self.fake_git
+
+        def malformed_paths(repo, *args):
+            if args == ("diff-tree", "--no-commit-id", "--name-only", "-z", "-r", CAS):
+                return intake.APPROVED_PATH.encode()  # missing required NUL
+            return original(repo, *args)
+
+        with patch.object(intake, "_git", side_effect=malformed_paths):
+            with self.assertRaisesRegex(ConflictError, "inventory is malformed"):
                 intake.create_intake(self.root, self.zip, CAS, BUILD)
 
     def test_post_cas_merge_commit_rejected(self):
@@ -304,8 +439,8 @@ class GdkBuildIntakeTests(unittest.TestCase):
                 return doc_commit.encode()
             if args == ("rev-list", "--parents", "-n", "1", doc_commit):
                 return (doc_commit + " " + CAS).encode()
-            if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", doc_commit):
-                return b"docs/SIGNAL_SPRINT_GDK_BUILD.md"
+            if args == ("diff-tree", "--no-commit-id", "--name-only", "-z", "-r", doc_commit):
+                return b"docs/SIGNAL_SPRINT_GDK_BUILD.md\x00"
             return original(repo, *args)
 
         with patch.object(intake, "_git", side_effect=docs_history):
@@ -321,13 +456,107 @@ class GdkBuildIntakeTests(unittest.TestCase):
                 return edit_commit.encode()
             if args == ("rev-list", "--parents", "-n", "1", edit_commit):
                 return (edit_commit + " " + CAS).encode()
-            if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", edit_commit):
-                return intake.APPROVED_PATH.encode()
+            if args == ("diff-tree", "--no-commit-id", "--name-only", "-z", "-r", edit_commit):
+                return intake.APPROVED_PATH.encode() + b"\x00"
             return original(repo, *args)
 
         with patch.object(intake, "_git", side_effect=identity_history):
             with self.assertRaisesRegex(ConflictError, "product change in history"):
                 intake.create_intake(self.root, self.zip, CAS, BUILD)
+
+    def test_missing_dedicated_cas_return_ref_rejected(self):
+        original = self.fake_git
+        cas_ref = "refs/heads/codex/game-signal-sprint-gdk-cas-" + SOURCE[:12]
+
+        def missing_return(repo, *args):
+            if args == ("rev-parse", cas_ref):
+                raise ConflictError("GDK build Git ancestry/content verification failed")
+            return original(repo, *args)
+
+        with patch.object(intake, "_git", side_effect=missing_return):
+            with self.assertRaisesRegex(ConflictError, "verification failed"):
+                intake.create_intake(self.root, self.zip, CAS, BUILD)
+
+    def test_different_cas_branch_head_rejected(self):
+        original = self.fake_git
+        cas_ref = "refs/heads/codex/game-signal-sprint-gdk-cas-" + SOURCE[:12]
+
+        def wrong_cas(repo, *args):
+            if args == ("rev-parse", cas_ref):
+                return ("f" * 40).encode()
+            return original(repo, *args)
+
+        with patch.object(intake, "_git", side_effect=wrong_cas):
+            with self.assertRaisesRegex(ConflictError, "CAS branch does not match"):
+                intake.create_intake(self.root, self.zip, CAS, BUILD)
+
+    def test_cas_branch_moves_during_verification_rejected(self):
+        original = self.fake_git
+        cas_ref = "refs/heads/codex/game-signal-sprint-gdk-cas-" + SOURCE[:12]
+        reads = 0
+
+        def racing_cas(repo, *args):
+            nonlocal reads
+            if args == ("rev-parse", cas_ref):
+                reads += 1
+                return (CAS if reads == 1 else "f" * 40).encode()
+            return original(repo, *args)
+
+        with patch.object(intake, "_git", side_effect=racing_cas):
+            with self.assertRaisesRegex(ConflictError, "CAS branch moved during"):
+                intake.create_intake(self.root, self.zip, CAS, BUILD)
+        self.assertEqual(reads, 2)
+
+    def test_build_branch_moves_during_verification_rejected(self):
+        original = self.fake_git
+        build_ref = "refs/heads/codex/game-signal-sprint-gdk-build-fixture"
+        reads = 0
+
+        def racing_build(repo, *args):
+            nonlocal reads
+            if args == ("rev-parse", build_ref):
+                reads += 1
+                return (BUILD if reads == 1 else "f" * 40).encode()
+            return original(repo, *args)
+
+        with patch.object(intake, "_git", side_effect=racing_build):
+            with self.assertRaisesRegex(ConflictError, "build branch moved during"):
+                intake.create_intake(self.root, self.zip, CAS, BUILD)
+        self.assertEqual(reads, 2)
+
+    def test_source_branch_moves_during_verification_rejected(self):
+        original = self.fake_git
+        source_ref = "refs/heads/" + PINNED_SIGNAL_SPRINT_JOB["source_branch"]
+        reads = 0
+
+        def racing_source(repo, *args):
+            nonlocal reads
+            if args == ("rev-parse", source_ref):
+                reads += 1
+                return (SOURCE if reads == 1 else "f" * 40).encode()
+            return original(repo, *args)
+
+        with patch.object(intake, "_git", side_effect=racing_source):
+            with self.assertRaisesRegex(ConflictError, "source branch moved during"):
+                intake.create_intake(self.root, self.zip, CAS, BUILD)
+        self.assertEqual(reads, 2)
+
+    def test_worktree_becomes_dirty_during_verification_rejected(self):
+        original = self.fake_git
+        reads = 0
+
+        def racing_worktree(repo, *args):
+            nonlocal reads
+            if args == ("status", "--porcelain", "--untracked-files=all"):
+                reads += 1
+                return b"" if reads == 1 else b"?? late-file.txt"
+            return original(repo, *args)
+
+        with patch.object(intake, "_git", side_effect=racing_worktree):
+            with self.assertRaisesRegex(ConflictError, "checkout changed during"):
+                intake.create_intake(self.root, self.zip, CAS, BUILD)
+        self.assertEqual(reads, 2)
+
 
 
 if __name__ == "__main__":

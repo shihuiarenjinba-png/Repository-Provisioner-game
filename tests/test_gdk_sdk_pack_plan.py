@@ -70,6 +70,45 @@ class GdkSdkPackPlanTests(unittest.TestCase):
         self.assertNotIn("makepkg2.exe", result["sdk_command_argv_not_executed"])
         self.assertEqual(list(self.output.iterdir()), [])
 
+    def test_unreviewed_staging_file_added_after_recheck_rejected(self):
+        # The mocked recheck reports the original six-file snapshot.
+        # A seventh payload must not slip through the final SDK handoff.
+        (self.staging / "unexpected.dll").write_bytes(b"unreviewed")
+        with self.assertRaisesRegex(ConflictError, "inventory changed"):
+            self.run_plan()
+
+    def test_staging_added_during_final_hash_rejected(self):
+        original_digest = plan._digest
+        injected = False
+
+        def add_payload(path):
+            nonlocal injected
+            digest = original_digest(path)
+            if not injected:
+                injected = True
+                (self.staging / "late.dll").write_bytes(b"late payload")
+            return digest
+
+        with patch.object(plan, "_digest", side_effect=add_payload):
+            with self.assertRaisesRegex(ConflictError, "inventory changed"):
+                self.run_plan()
+
+    def test_output_populated_during_final_hash_rejected(self):
+        original_digest = plan._digest
+        injected = False
+
+        def add_output(path):
+            nonlocal injected
+            digest = original_digest(path)
+            if not injected:
+                injected = True
+                (self.output / "unexpected.msixvc").write_bytes(b"stale output")
+            return digest
+
+        with patch.object(plan, "_digest", side_effect=add_output):
+            with self.assertRaisesRegex(ConflictError, "output changed"):
+                self.run_plan()
+
     def test_changed_exe_after_recheck_rejected(self):
         (self.staging / "SignalSprint.exe").write_bytes(b"tampered")
         with self.assertRaisesRegex(ConflictError, "changed after recheck"):
@@ -82,7 +121,7 @@ class GdkSdkPackPlanTests(unittest.TestCase):
 
     def test_missing_staging_file_rejected(self):
         (self.staging / "SmallLogo.png").unlink()
-        with self.assertRaises(OSError):
+        with self.assertRaisesRegex(ConflictError, "inventory changed"):
             self.run_plan()
 
     def test_extra_manifest_entry_rejected(self):
@@ -121,6 +160,25 @@ class GdkSdkPackPlanTests(unittest.TestCase):
         self.output = link
         with self.assertRaisesRegex(Exception, "linked"):
             self.run_plan()
+
+    def test_symlinked_ancestor_of_every_sdk_path_rejected(self):
+        # The leaf itself is a regular file/directory. A linked ancestor
+        # must still fail closed before building an MSIXVC2 pack plan.
+        link = self.factory.parent / "redirected-root"
+        try:
+            link.symlink_to(self.factory.parent, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("Windows runner cannot create symlinks")
+        for attribute in ("factory", "staging", "output", "zip", "receipt"):
+            with self.subTest(path=attribute):
+                original = getattr(self, attribute)
+                setattr(self, attribute, link / original.name)
+                try:
+                    self.assertFalse(getattr(self, attribute).is_symlink())
+                    with self.assertRaisesRegex(ConflictError, "linked path"):
+                        self.run_plan()
+                finally:
+                    setattr(self, attribute, original)
 
     def test_receipt_claims_store_submission_rejected(self):
         self.evidence["store_submitted"] = True

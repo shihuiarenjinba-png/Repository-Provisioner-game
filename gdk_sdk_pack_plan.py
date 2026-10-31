@@ -19,13 +19,32 @@ from gdk_msixvc2_recheck import recheck
 from package_identity_provisioner import ConflictError, HoldError, PINNED_SIGNAL_SPRINT_JOB
 
 
+def _reject_redirected_path(path: Path, description: str) -> None:
+    """Reject linked ancestors, including Windows junctions, before SDK handoff.
+
+    A safe-looking staging/output leaf may still be redirected by a linked
+    parent. This is a fail-closed preflight, not a replacement for trusted
+    storage or handle-level protections against concurrent filesystem races.
+    """
+    for component in (path, *path.parents):
+        try:
+            if (component.is_symlink()
+                    or getattr(component, "is_junction", lambda: False)()):
+                raise ConflictError(description + " linked path (symlink or junction)")
+        except (OSError, RuntimeError) as exc:
+            raise HoldError(description + " path cannot be inspected") from exc
+
+
 def _directory(path: Path, description: str) -> Path:
-    if path.is_symlink() or not path.is_dir():
+    _reject_redirected_path(path, description)
+    if not path.is_dir():
         raise HoldError(description + " directory missing or linked")
     try:
-        return path.resolve(strict=True)
+        resolved = path.resolve(strict=True)
     except (OSError, RuntimeError) as exc:
         raise HoldError(description + " directory cannot be resolved") from exc
+    _reject_redirected_path(path, description)
+    return resolved
 
 
 def _under(child: Path, parent: Path) -> bool:
@@ -37,6 +56,17 @@ def make_pack_plan(factory_checkout: Path, artifact_zip: Path, cas_sha: str,
                    reviewed_display_name: str, receipt_path: Path,
                    output_dir: Path) -> dict:
     """Fail closed on changed staging, unsafe output, or non-GDK evidence."""
+    # Guard all five input/output paths before any SDK-facing plan is made.
+    # In particular, a symlinked *parent* of the ZIP or receipt must not
+    # silently redirect the immutable evidence used by the build.
+    for path, label in (
+        (factory_checkout, "Factory checkout"),
+        (artifact_zip, "Pinned artifact ZIP"),
+        (staging_dir, "GDK staging"),
+        (receipt_path, "Preflight receipt"),
+        (output_dir, "GDK output"),
+    ):
+        _reject_redirected_path(path, label)
     verified = recheck(factory_checkout, artifact_zip, cas_sha, build_sha,
                        staging_dir, package_version, reviewed_display_name,
                        receipt_path)
@@ -76,6 +106,17 @@ def make_pack_plan(factory_checkout: Path, artifact_zip: Path, cas_sha: str,
     if any(output.iterdir()):
         raise ConflictError("GDK SDK output must be empty before packaging")
 
+    # The earlier recheck verified exactly six files, but a new unreviewed
+    # payload could appear after that snapshot. Re-enumerate at SDK handoff,
+    # not only the six expected filenames, and repeat after hashing.
+    expected_names = set(MAX_FILE_BYTES)
+    def require_exact_staging_inventory() -> None:
+        entries = list(staging.iterdir())
+        if len(entries) != len(expected_names) or {p.name for p in entries} != expected_names:
+            raise ConflictError("GDK SDK staging inventory changed after recheck")
+
+    require_exact_staging_inventory()
+
     # A receipt is not enough: hash the actual six staging files again.
     for name, limit in MAX_FILE_BYTES.items():
         file = staging / name
@@ -85,6 +126,18 @@ def make_pack_plan(factory_checkout: Path, artifact_zip: Path, cas_sha: str,
         expected = hashes[name]
         if not isinstance(expected, str) or len(expected) != 64 or _digest(file) != expected:
             raise ConflictError("GDK SDK staging changed after recheck: " + name)
+
+    require_exact_staging_inventory()
+    if any(output.iterdir()):
+        raise ConflictError("GDK SDK output changed before packaging")
+    for path, label in (
+        (factory_checkout, "Factory checkout"),
+        (artifact_zip, "Pinned artifact ZIP"),
+        (staging_dir, "GDK staging"),
+        (receipt_path, "Preflight receipt"),
+        (output_dir, "GDK output"),
+    ):
+        _reject_redirected_path(path, label)
 
     # No /skipvalidation, /upload, /auth or browser/Partner Center operation.
     argv = ["makepkg.exe", "pack", "/msixvc2", "/d", str(staging),

@@ -52,6 +52,25 @@ class HostedBootstrapTests(unittest.TestCase):
                 self.assertEqual(result["preview_2604_catalog_status"], "UNKNOWN")
                 self.assertFalse(result["retail_msixvc2_sdk_approved"])
 
+    def test_successful_unparseable_catalog_is_unknown_not_absent(self):
+        # A zero-token success is not evidence that 2610 is unavailable.
+        result = bootstrap._catalog_assessment("NO_RECOGNIZED_VERSION_TOKENS", [])
+        self.assertEqual(result["retail_2610_catalog_status"], "UNKNOWN")
+        self.assertEqual(result["preview_2604_catalog_status"], "UNKNOWN")
+        self.assertFalse(result["retail_msixvc2_sdk_approved"])
+
+    def test_successful_catalog_with_only_unrecognized_versions_is_unknown(self):
+        # WinGet can return localized/truncated text or only older versions.
+        with mock.patch.object(bootstrap.subprocess, "run",
+                               return_value=mock.Mock(returncode=0,
+                                                      stdout="Version\\n2510.5.6322\\n")) as run:
+            result = bootstrap._probe_versions(Path("C:/approved/winget.exe"))
+        self.assertEqual(result["catalog_query_status"], "NO_RECOGNIZED_VERSION_TOKENS")
+        self.assertEqual(result["retail_2610_catalog_status"], "UNKNOWN")
+        self.assertEqual(result["unapproved_2610_candidates"], [])
+        self.assertFalse(result["retail_msixvc2_sdk_approved"])
+        self.assertNotIn("install", run.call_args.args[0])
+
     def test_catalog_probe_extracts_only_unapproved_2610_candidates(self):
         sample = "Version\n2610.0.8000\n2604.0.7500\n2610.0.8000\n2610.1.8100\n"
         with mock.patch.object(bootstrap.subprocess, "run",
@@ -101,6 +120,28 @@ class HostedBootstrapTests(unittest.TestCase):
             result = bootstrap.bootstrap(probe_versions=True)
         self.assertEqual(result["catalog_query_status"], "WINGET_UNAVAILABLE")
         self.assertEqual(result["unapproved_version_candidates"], [])
+        run.assert_not_called()
+
+    def test_untrusted_winget_alias_reports_unknown_without_install(self):
+        with mock.patch.object(bootstrap.sys, "platform", "win32"), \
+             mock.patch.object(bootstrap, "_winget",
+                               side_effect=ConflictError("GDK makepkg candidate cannot be resolved")), \
+             mock.patch.object(bootstrap.subprocess, "run") as run:
+            result = bootstrap.bootstrap(probe_versions=True)
+        self.assertEqual(result["status"], "GDK_HOSTED_WINGET_UNTRUSTED_PROBE_ONLY")
+        self.assertEqual(result["retail_2610_catalog_status"], "UNKNOWN")
+        self.assertFalse(result["winget_available"])
+        self.assertFalse(result["sdk_installed_by_this_run"])
+        run.assert_not_called()
+
+    def test_untrusted_winget_alias_still_blocks_manual_install(self):
+        with mock.patch.object(bootstrap.sys, "platform", "win32"), \
+             mock.patch.object(bootstrap, "_winget",
+                               side_effect=ConflictError("untrusted alias")), \
+             mock.patch.object(bootstrap.subprocess, "run") as run:
+            with self.assertRaisesRegex(ConflictError, "untrusted alias"):
+                bootstrap.bootstrap(install=True, observe_only=True,
+                                    sdk_version="2610.0.8000")
         run.assert_not_called()
 
     def test_non_windows_probe_never_installs(self):
@@ -229,12 +270,154 @@ class HostedBootstrapTests(unittest.TestCase):
         self.assertFalse(result["real_msix_pass"])
         self.assertFalse(result["store_submitted"])
 
+    def test_observation_requires_explicit_install(self):
+        with mock.patch.object(bootstrap.sys, "platform", "win32"), \
+             mock.patch.object(bootstrap.subprocess, "run") as run:
+            with self.assertRaisesRegex(HoldError, "requires explicit install"):
+                bootstrap.bootstrap(observe_only=True)
+        run.assert_not_called()
+
+    def test_observation_on_push_is_forbidden_even_with_version(self):
+        env = {"CI": "true", "GITHUB_ACTIONS": "true",
+               "RUNNER_OS": "Windows", "RUNNER_ENVIRONMENT": "github-hosted",
+               "GITHUB_EVENT_NAME": "push", "INSTALL_REQUESTED": "true"}
+        with mock.patch.object(bootstrap.sys, "platform", "win32"), \
+             mock.patch.object(bootstrap, "_winget", return_value=Path("C:/winget.exe")), \
+             mock.patch.dict(os.environ, env), \
+             mock.patch.object(bootstrap.subprocess, "run") as run:
+            with self.assertRaisesRegex(HoldError, "manual workflow_dispatch"):
+                bootstrap.bootstrap(install=True, observe_only=True,
+                                    sdk_version="2610.0.8000")
+        run.assert_not_called()
+
+    def test_observation_rejects_approved_digest_to_avoid_mode_confusion(self):
+        env = {"CI": "true", "GITHUB_ACTIONS": "true",
+               "RUNNER_OS": "Windows", "RUNNER_ENVIRONMENT": "github-hosted",
+               "GITHUB_EVENT_NAME": "workflow_dispatch", "INSTALL_REQUESTED": "true"}
+        with mock.patch.object(bootstrap.sys, "platform", "win32"), \
+             mock.patch.object(bootstrap, "_winget", return_value=Path("C:/winget.exe")), \
+             mock.patch.dict(os.environ, env), \
+             mock.patch.object(bootstrap.subprocess, "run") as run:
+            with self.assertRaisesRegex(HoldError, "must not accept an approved digest"):
+                bootstrap.bootstrap(install=True, observe_only=True,
+                                    sdk_version="2610.0.8000",
+                                    approved_makepkg_sha256="a" * 64)
+        run.assert_not_called()
+
+    def test_manual_observation_returns_unapproved_hash_without_build(self):
+        env = {"CI": "true", "GITHUB_ACTIONS": "true",
+               "RUNNER_OS": "Windows", "RUNNER_ENVIRONMENT": "github-hosted",
+               "GITHUB_EVENT_NAME": "workflow_dispatch", "INSTALL_REQUESTED": "true"}
+        with tempfile.TemporaryDirectory() as temp:
+            exe = Path(temp) / "makepkg.exe"
+            exe.write_bytes(b"synthetic SDK observation - never executed")
+            expected = bootstrap._sha256(exe)
+            with mock.patch.object(bootstrap.sys, "platform", "win32"), \
+                 mock.patch.object(bootstrap, "_winget", return_value=Path("C:/winget.exe")), \
+                 mock.patch.dict(os.environ, env), \
+                 mock.patch.object(bootstrap.subprocess, "run",
+                                   return_value=mock.Mock(returncode=0)) as run, \
+                 mock.patch.object(bootstrap, "discover_makepkg", return_value=exe):
+                result = bootstrap.bootstrap(install=True, observe_only=True,
+                                             sdk_version="2610.0.8000")
+        self.assertEqual(result["status"],
+                         "GDK_HOSTED_SDK_HASH_OBSERVED_UNAPPROVED_NO_BUILD")
+        self.assertEqual(result["makepkg_sha256_observed_unapproved"], expected)
+        self.assertFalse(result["sdk_approved"])
+        self.assertFalse(result["sdk_version_verified"])
+        self.assertFalse(result["makepkg_executed"])
+        self.assertFalse(result["cas_return_pass"])
+        self.assertFalse(result["real_msix_pass"])
+        self.assertFalse(result["e2e_pass"])
+        self.assertFalse(result["store_submitted"])
+        self.assertIn("install", run.call_args.args[0])
+        self.assertNotIn("makepkg", run.call_args.args[0])
+
     def test_checkout_winget_rejected(self):
         with tempfile.TemporaryDirectory() as temp:
             candidate = Path(temp) / "winget.exe"
             candidate.write_bytes(b"untrusted")
             with mock.patch.dict(os.environ, {"GITHUB_WORKSPACE": temp, "PATH": temp}):
                 with self.assertRaisesRegex(ConflictError, "checkout"):
+                    bootstrap._winget()
+
+    def test_observed_makepkg_digest_rejects_symlinked_binary(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            real = root / "real-makepkg.exe"
+            real.write_bytes(b"synthetic unapproved GDK tool")
+            linked = root / "makepkg.exe"
+            try:
+                linked.symlink_to(real)
+            except (OSError, NotImplementedError):
+                self.skipTest("file symlink creation unavailable")
+            with self.assertRaisesRegex(ConflictError, "linked"):
+                bootstrap._sha256(linked)
+
+    def test_observed_makepkg_digest_rejects_linked_parent(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            actual = root / "actual"
+            actual.mkdir()
+            (actual / "makepkg.exe").write_bytes(b"synthetic unapproved GDK tool")
+            linked = root / "linked"
+            try:
+                linked.symlink_to(actual, target_is_directory=True)
+            except (OSError, NotImplementedError):
+                self.skipTest("directory symlink creation unavailable")
+            with self.assertRaisesRegex(ConflictError, "linked"):
+                bootstrap._sha256(linked / "makepkg.exe")
+
+    def test_observed_makepkg_digest_rejects_open_handle_identity_swap(self):
+        with tempfile.TemporaryDirectory() as temp:
+            exe = Path(temp) / "makepkg.exe"
+            exe.write_bytes(b"synthetic unapproved GDK tool")
+            before = exe.lstat()
+            # A same-size/same-mtime path swap must not attribute the bytes
+            # of an opened handle to a different SDK executable identity.
+            wrong_handle = mock.Mock(st_dev=before.st_dev,
+                                     st_ino=before.st_ino + 1,
+                                     st_size=before.st_size)
+            with mock.patch.object(bootstrap.os, "fstat", return_value=wrong_handle):
+                with self.assertRaisesRegex(ConflictError, "changed before open"):
+                    bootstrap._sha256(exe)
+
+    def test_observed_makepkg_digest_rechecks_link_after_hash(self):
+        with tempfile.TemporaryDirectory() as temp:
+            exe = Path(temp) / "makepkg.exe"
+            exe.write_bytes(b"synthetic unapproved GDK tool")
+            with mock.patch.object(bootstrap, "_regular_executable",
+                                   side_effect=[exe, ConflictError("linked after hash")]):
+                with self.assertRaisesRegex(ConflictError, "linked after hash"):
+                    bootstrap._sha256(exe)
+
+    def test_symlinked_winget_executable_rejected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            real = root / "actual-winget.exe"
+            real.write_bytes(b"unreviewed executable")
+            link = root / "winget.exe"
+            try:
+                link.symlink_to(real)
+            except (OSError, NotImplementedError):
+                self.skipTest("file symlink creation unavailable")
+            with mock.patch.dict(os.environ, {"PATH": temp, "GITHUB_WORKSPACE": ""}):
+                with self.assertRaisesRegex(ConflictError, "linked"):
+                    bootstrap._winget()
+
+    def test_symlinked_winget_parent_rejected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            actual = root / "actual"
+            actual.mkdir()
+            (actual / "winget.exe").write_bytes(b"unreviewed executable")
+            link = root / "linked"
+            try:
+                link.symlink_to(actual, target_is_directory=True)
+            except (OSError, NotImplementedError):
+                self.skipTest("directory symlink creation unavailable")
+            with mock.patch.dict(os.environ, {"PATH": str(link), "GITHUB_WORKSPACE": ""}):
+                with self.assertRaisesRegex(ConflictError, "linked"):
                     bootstrap._winget()
 
     def test_cwd_winget_is_not_discovered(self):
