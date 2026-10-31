@@ -59,7 +59,7 @@ class FakeAPI:
             assert endpoint.endswith("?ref=" + CAS)
             encoded = base64.b64encode(json.dumps(self.approved).encode()).decode()
             if self.linewrap:
-                encoded = "\\n".join(encoded[i:i+60] for i in range(0, len(encoded), 60)) + "\\n"
+                encoded = "\n".join(encoded[i:i+60] for i in range(0, len(encoded), 60)) + "\n"
             if self.bad_base64:
                 encoded = encoded[:10] + "!" + encoded[11:]
             return {"encoding": "base64", "content": encoded}
