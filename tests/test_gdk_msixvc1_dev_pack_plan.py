@@ -25,8 +25,8 @@ def approved_shared_plan():
         "reviewed_display_name": "Signal Sprint",
         "verified_receipt_sha256": "e" * 64,
         "sdk_command_argv_not_executed": [
-            "makepkg.exe", "pack", "/msixvc2", "/d", "/stage",
-            "/pc", "/pd", "/output", "/validationcritical",
+            "makepkg.exe", "pack", "/msixvc2", "/d", str(Path("/stage").resolve()),
+            "/pc", "/pd", str(Path("/output").resolve()), "/validationcritical",
         ],
         "gdk_sdk_validated": False,
         "real_msixvc_built": False,
@@ -60,8 +60,8 @@ class Msixvc1DevPlanTests(unittest.TestCase):
         self.assertEqual(result["source_sha"], self.base["source_sha"])
         self.assertEqual(result["staging_files_sha256"], self.base["staging_files_sha256"])
         self.assertEqual(result["sdk_command_argv_not_executed"], [
-            "makepkg.exe", "pack", "/d", "/stage", "/pc", "/pd",
-            "/output", "/validationcritical",
+            "makepkg.exe", "pack", "/d", str(Path("/stage").resolve()), "/pc", "/pd",
+            str(Path("/output").resolve()), "/validationcritical",
         ])
         self.assertTrue(result["development_only"])
         for key in ("retail_submission_ready", "retail_encryption_approved",
