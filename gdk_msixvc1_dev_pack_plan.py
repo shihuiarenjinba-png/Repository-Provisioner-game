@@ -46,6 +46,9 @@ def make_msixvc1_dev_plan(factory_checkout: Path, artifact_zip: Path,
         "gdk_sdk_validated": False,
         "real_msixvc_built": False,
         "store_submitted": False,
+        "public_release_requires_certification": True,
+        "msixvc2_preview_public_certification_blocked": False,
+        "next_stage": "WINDOWS_GDK_SDK_VALIDATE_AND_PACK_WITH_FRESH_RECHECK",
     }
     for key, value in expected.items():
         if type(base.get(key)) is not type(value) or base[key] != value:
@@ -80,7 +83,10 @@ def make_msixvc1_dev_plan(factory_checkout: Path, artifact_zip: Path,
             or argv[:4] != MSIXVC2_PREFIX
             or argv[5:7] != ["/pc", "/pd"]
             or argv[8] != "/validationcritical"
-            or not argv[4] or not argv[7]):
+            # A future shared helper must not silently redirect the SDK to
+            # a different staging/output directory while keeping valid hashes.
+            or argv[4] != str(staging_dir.resolve())
+            or argv[7] != str(output_dir.resolve())):
         raise ConflictError("GDK shared preflight SDK command unexpected")
     # The trusted base plan already validates the staging/output paths and
     # all six staged hashes. Preserve its arguments; do not add /l or /lk
