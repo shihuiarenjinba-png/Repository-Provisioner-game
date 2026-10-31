@@ -1,6 +1,7 @@
 """Offline, no-GitHub tests of exact-byte original artifact preservation."""
 import errno
 import hashlib
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -36,6 +37,62 @@ class PreservationTests(unittest.TestCase):
         self.assertEqual(second["status"], "EXISTING_VERIFIED")
         self.assertEqual((self.destination / preservation.ARCHIVE_NAME).read_bytes(),
                          self.source.read_bytes())
+
+    def test_manifest_is_portable_strict_json_and_idempotent(self):
+        first = preservation.preserve(self.source, self.destination)
+        path = self.destination / preservation.MANIFEST_NAME
+        raw = path.read_bytes()
+        evidence = json.loads(raw)
+        self.assertEqual(evidence["archive_sha256"], self.digest)
+        self.assertEqual(evidence["archive_size_bytes"], len(self.source.read_bytes()))
+        self.assertEqual(evidence["immutable_source_sha"],
+                         preservation.PINNED_SIGNAL_SPRINT_JOB["source_sha"])
+        self.assertEqual(evidence["signature_status"], "QA_UNSIGNED")
+        self.assertFalse(evidence["cas_return_pass"])
+        self.assertFalse(evidence["real_msix_pass"])
+        self.assertFalse(evidence["e2e_pass"])
+        self.assertFalse(evidence["store_submitted"])
+        self.assertEqual(first["integrity_manifest"], str(path))
+        self.assertEqual(first["integrity_manifest_sha256"], hashlib.sha256(raw).hexdigest())
+        second = preservation.preserve(self.source, self.destination)
+        self.assertEqual(second["status"], "EXISTING_VERIFIED")
+        self.assertEqual(path.read_bytes(), raw)
+
+    def test_missing_manifest_can_be_restored_without_rewriting_zip(self):
+        preservation.preserve(self.source, self.destination)
+        archive = self.destination / preservation.ARCHIVE_NAME
+        before = archive.stat()
+        (self.destination / preservation.MANIFEST_NAME).unlink()
+        result = preservation.preserve(self.source, self.destination)
+        self.assertEqual(result["status"], "EXISTING_VERIFIED")
+        self.assertTrue((self.destination / preservation.MANIFEST_NAME).is_file())
+        self.assertEqual(archive.stat().st_mtime_ns, before.st_mtime_ns)
+
+    def test_conflicting_manifest_rejected_without_touching_zip(self):
+        preservation.preserve(self.source, self.destination)
+        archive = self.destination / preservation.ARCHIVE_NAME
+        original = archive.read_bytes()
+        manifest = self.destination / preservation.MANIFEST_NAME
+        manifest.write_text('{"archive_sha256":"different"}', encoding="utf-8")
+        with self.assertRaisesRegex(ConflictError, "manifest conflicts"):
+            preservation.preserve(self.source, self.destination)
+        self.assertEqual(archive.read_bytes(), original)
+        self.assertEqual(manifest.read_text(encoding="utf-8"),
+                         '{"archive_sha256":"different"}')
+
+    def test_linked_manifest_is_rejected(self):
+        preservation.preserve(self.source, self.destination)
+        manifest = self.destination / preservation.MANIFEST_NAME
+        manifest.unlink()
+        external = self.destination.parent / "other-manifest.json"
+        external.write_text("not trusted", encoding="utf-8")
+        try:
+            manifest.symlink_to(external)
+        except (OSError, NotImplementedError):
+            self.skipTest("Windows runner cannot create symlinks")
+        with self.assertRaisesRegex(ConflictError, "symlink or junction"):
+            preservation.preserve(self.source, self.destination)
+        self.assertEqual(external.read_text(encoding="utf-8"), "not trusted")
 
     def test_filesystem_without_hardlinks_uses_exclusive_copy(self):
         with patch.object(preservation.os, "link", side_effect=OSError(errno.EOPNOTSUPP, "no hardlinks")):
