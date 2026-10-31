@@ -39,6 +39,23 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _reject_redirected_artifact_path(path: Path) -> None:
+    """Reject symlink/junction ancestors as well as a redirected ZIP leaf.
+
+    The pinned digest authenticates bytes, but a linked parent can redirect
+    the later SDK consumer to a different storage root. This check is repeated
+    around both reads; it does not replace owner-managed trusted storage.
+    """
+    for component in (path, *path.parents):
+        try:
+            linked = component.is_symlink()
+            junction = getattr(component, "is_junction", lambda: False)()
+        except (OSError, RuntimeError) as exc:
+            raise HoldError("Pinned GDK artifact path cannot be inspected") from exc
+        if linked or junction:
+            raise ConflictError("Pinned GDK artifact path contains symlink or junction")
+
+
 def _json(data: bytes) -> dict:
     try:
         value = json.loads(data.decode("utf-8"), object_pairs_hook=_unique_json_object)
@@ -176,11 +193,13 @@ def verify_cas_checkout(repo: Path, cas_sha: str, build_sha: str) -> dict:
 
 
 def inspect_pinned_artifact(path: Path) -> dict:
-    if (path.is_symlink() or not path.is_file() or not 0 < path.stat().st_size < 100_000_000):
+    _reject_redirected_artifact_path(path)
+    if (not path.is_file() or not 0 < path.stat().st_size < 100_000_000):
         raise HoldError("Pinned GDK EXE artifact missing, linked or oversized")
     # Hash and parse one immutable in-memory snapshot. Opening the path again
     # after the first digest could otherwise consume a different ZIP.
     snapshot = path.read_bytes()
+    _reject_redirected_artifact_path(path)
     if _sha256(snapshot) != ARTIFACT_SHA256:
         raise ConflictError("Pinned GDK artifact ZIP bytes changed")
     try:
@@ -203,9 +222,11 @@ def inspect_pinned_artifact(path: Path) -> dict:
     # The snapshot is trustworthy, but downstream stages also receive the
     # path. Reject a swap during inspection instead of returning a stale PASS.
     try:
-        if (path.is_symlink() or not path.is_file()
+        _reject_redirected_artifact_path(path)
+        if (not path.is_file()
                 or _sha256(path.read_bytes()) != ARTIFACT_SHA256):
             raise ConflictError("Pinned GDK artifact changed during verification")
+        _reject_redirected_artifact_path(path)
     except OSError as exc:
         raise HoldError("Pinned GDK artifact unavailable during verification") from exc
     if _sha256(exe) != EXE_SHA256:
