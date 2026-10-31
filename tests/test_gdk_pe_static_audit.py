@@ -1,8 +1,15 @@
 """Offline synthetic fixtures for Signal Sprint's pinned PE static-audit gate."""
+import hashlib
+import io
+from pathlib import Path
 import struct
+import tempfile
 import unittest
+from unittest import mock
+import zipfile
 
 from package_identity_provisioner import ConflictError
+import gdk_pe_static_audit as pe_audit
 from gdk_pe_static_audit import inspect_pe
 
 
@@ -67,6 +74,40 @@ class PinnedPeAuditTests(unittest.TestCase):
         b[0x450:0x45D] = b"VCRUNTIME.dll\x00"
         self.assertEqual(inspect_pe(bytes(b))["vc_runtime_direct_imports"], ["VCRUNTIME.DLL"])
 
+
+    def test_pe_audit_rejects_intermediate_unpinned_zip_even_if_outer_checks_pass(self):
+        # Simulate a path swap between the first and second pinned checks.
+        # The previous implementation opened this untrusted archive and
+        # reported PASS when both outer inspections were mocked as valid.
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "signal-sprint.zip"
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr("SignalSprint.exe", make_pe())
+            approved = {"artifact_zip_sha256": pe_audit.ARTIFACT_SHA256,
+                        "executable_sha256": "a" * 64}
+            with mock.patch.object(pe_audit, "inspect_pinned_artifact",
+                                   return_value=approved) as inspected:
+                with self.assertRaisesRegex(ConflictError, "changed before PE audit"):
+                    pe_audit.audit_pinned_zip(path)
+            self.assertEqual(inspected.call_count, 1)
+
+    def test_pe_audit_accepts_exact_verified_snapshot(self):
+        # Synthetic fixture: replace the pinned digest only within the test.
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "signal-sprint.zip"
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr("SignalSprint.exe", make_pe())
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            approved = {"artifact_zip_sha256": digest,
+                        "executable_sha256": "a" * 64}
+            with mock.patch.object(pe_audit, "ARTIFACT_SHA256", digest), \
+                 mock.patch.object(pe_audit, "inspect_pinned_artifact",
+                                   return_value=approved) as inspected:
+                result = pe_audit.audit_pinned_zip(path)
+            self.assertEqual(inspected.call_count, 2)
+            self.assertEqual(result["artifact_zip_sha256"], digest)
+            self.assertEqual(result["direct_import_dlls"], ["KERNEL32.DLL"])
+            self.assertFalse(result["real_msixvc_built"])
 
 if __name__ == "__main__":
     unittest.main()

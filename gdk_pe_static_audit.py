@@ -6,6 +6,8 @@ Authenticode verification, or proof that dynamic DLL loads are absent.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import io
 import json
 from pathlib import Path
 import re
@@ -13,7 +15,7 @@ import struct
 import sys
 import zipfile
 
-from gdk_build_intake import inspect_pinned_artifact
+from gdk_build_intake import ARTIFACT_SHA256, inspect_pinned_artifact
 from package_identity_provisioner import ConflictError, HoldError, PINNED_SIGNAL_SPRINT_JOB
 
 
@@ -100,7 +102,13 @@ def inspect_pe(exe: bytes) -> dict:
 
 def audit_pinned_zip(original_zip: Path) -> dict:
     pinned = inspect_pinned_artifact(original_zip)
-    with zipfile.ZipFile(original_zip) as z:
+    # Inspect the exact pinned ZIP bytes, not a second path-opened archive.
+    # Otherwise a file replaced only between the two surrounding checks
+    # could yield a PASS for an EXE that was never part of the pinned ZIP.
+    snapshot = original_zip.read_bytes()
+    if hashlib.sha256(snapshot).hexdigest() != ARTIFACT_SHA256:
+        raise ConflictError("Signal Sprint pinned ZIP changed before PE audit")
+    with zipfile.ZipFile(io.BytesIO(snapshot)) as z:
         exe = z.read("SignalSprint.exe")
     report = inspect_pe(exe)
     # The ZIP path can change after the first inspection; fail closed.
