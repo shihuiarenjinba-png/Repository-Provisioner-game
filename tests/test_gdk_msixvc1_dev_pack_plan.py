@@ -31,6 +31,9 @@ def approved_shared_plan():
         "gdk_sdk_validated": False,
         "real_msixvc_built": False,
         "store_submitted": False,
+        "public_release_requires_certification": True,
+        "msixvc2_preview_public_certification_blocked": False,
+        "next_stage": "WINDOWS_GDK_SDK_VALIDATE_AND_PACK_WITH_FRESH_RECHECK",
     }
 
 
@@ -148,6 +151,32 @@ class Msixvc1DevPlanTests(unittest.TestCase):
                         self.plan()
                 finally:
                     self.base["verified_receipt_sha256"] = original
+
+    def test_certification_or_shared_next_stage_regression_is_rejected(self):
+        for key, bad in (
+            ("public_release_requires_certification", False),
+            ("msixvc2_preview_public_certification_blocked", True),
+            ("next_stage", "STORE_SUBMIT"),
+        ):
+            with self.subTest(key=key):
+                original = self.base[key]
+                self.base[key] = bad
+                try:
+                    with self.assertRaisesRegex(ConflictError, "shared preflight mismatch"):
+                        self.plan()
+                finally:
+                    self.base[key] = original
+
+    def test_sdk_staging_and_output_paths_cannot_be_redirected(self):
+        for index, bad in ((4, "/other-staging"), (7, "/other-output")):
+            with self.subTest(index=index):
+                original = self.base["sdk_command_argv_not_executed"][index]
+                self.base["sdk_command_argv_not_executed"][index] = bad
+                try:
+                    with self.assertRaisesRegex(ConflictError, "command unexpected"):
+                        self.plan()
+                finally:
+                    self.base["sdk_command_argv_not_executed"][index] = original
 
     def test_shared_gate_failure_is_not_bypassed(self):
         with patch.object(legacy, "make_pack_plan",
