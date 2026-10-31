@@ -65,7 +65,7 @@ def _png_dimensions(path: Path) -> tuple[int, int]:
     if not data.startswith(PNG_SIGNATURE):
         raise ConflictError("GDK icon is not PNG: " + path.name)
     cursor, dims, ended = len(PNG_SIGNATURE), None, False
-    idat, seen_idat, idat_ended, palette = [], False, False, False
+    idat, seen_idat, idat_ended, palette, transparency = [], False, False, False, False
     bit_depth = color_type = interlace = None
     while cursor < len(data):
         if len(data) - cursor < 12:
@@ -114,6 +114,15 @@ def _png_dimensions(path: Path) -> tuple[int, int]:
                     or (color_type == 3 and size // 3 > (1 << bit_depth))):
                 raise ConflictError("GDK icon invalid PNG palette: " + path.name)
             palette = True
+        elif tag == b"tRNS":
+            # PNG transparency keys are valid for RGB, but forbidden for RGBA.
+            # For 8-bit RGB, tRNS contains three 16-bit samples whose high
+            # bytes must be zero. CRC-correct malformed metadata must not
+            # pass the GDK staging gate as validated artwork.
+            if (transparency or seen_idat or color_type != 2 or size != 6
+                    or any(chunk[index] != 0 for index in (0, 2, 4))):
+                raise ConflictError("GDK icon invalid PNG transparency chunk: " + path.name)
+            transparency = True
         elif tag == b"IDAT":
             if idat_ended:
                 raise ConflictError("GDK icon noncontiguous PNG IDAT: " + path.name)
