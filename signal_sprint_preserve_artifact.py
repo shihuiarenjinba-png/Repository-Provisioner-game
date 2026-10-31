@@ -14,11 +14,12 @@ import os
 from pathlib import Path
 import tempfile
 
-from gdk_build_intake import ARTIFACT_SHA256, inspect_pinned_artifact
+from gdk_build_intake import ARTIFACT_SHA256, EXE_SHA256, inspect_pinned_artifact
 from package_identity_provisioner import ConflictError, HoldError, PINNED_SIGNAL_SPRINT_JOB
 
 ARCHIVE_NAME = "signal-sprint-original-github-artifact-12706862577.zip"
 ARTIFACT_ID = 12706862577
+MANIFEST_NAME = ARCHIVE_NAME + ".integrity.json"
 
 
 def _reject_redirected_path(path: Path, label: str) -> None:
@@ -40,6 +41,65 @@ def _reject_redirected_path(path: Path, label: str) -> None:
 
 def _hash(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def _preserve_integrity_manifest(destination_dir: Path, snapshot: bytes) -> tuple[Path, str]:
+    """Store portable, byte-stable backup evidence beside the original ZIP.
+
+    Exclusive creation never overwrites an existing manifest. A retry verifies
+    exact canonical bytes, including all fail-closed gate states, before PASS.
+    """
+    manifest_path = destination_dir / MANIFEST_NAME
+    _reject_redirected_path(manifest_path, "Preservation manifest")
+    payload = {
+        "schema_version": 1,
+        "product": "Signal Sprint",
+        "partner_center_selection": "GDK_GAME",
+        "request_id": PINNED_SIGNAL_SPRINT_JOB["request_id"],
+        "immutable_source_sha": PINNED_SIGNAL_SPRINT_JOB["source_sha"],
+        "original_github_artifact_id": ARTIFACT_ID,
+        "archive_name": ARCHIVE_NAME,
+        "archive_size_bytes": len(snapshot),
+        "archive_sha256": ARTIFACT_SHA256,
+        "executable_name": "SignalSprint.exe",
+        "executable_sha256": EXE_SHA256,
+        "signature_status": "QA_UNSIGNED",
+        "cas_return_pass": False,
+        "real_msix_pass": False,
+        "e2e_pass": False,
+        "store_submitted": False,
+    }
+    raw = (json.dumps(payload, sort_keys=True, ensure_ascii=False,
+                      separators=(",", ":")) + "\\n").encode("utf-8")
+
+    def verify() -> None:
+        _reject_redirected_path(manifest_path, "Preservation manifest")
+        if not manifest_path.is_file() or manifest_path.is_symlink():
+            raise ConflictError("Preservation manifest missing, linked or not a regular file")
+        if manifest_path.read_bytes() != raw:
+            raise ConflictError("Preservation manifest conflicts with pinned original; refusing overwrite")
+        _reject_redirected_path(manifest_path, "Preservation manifest")
+
+    if manifest_path.exists() or manifest_path.is_symlink():
+        verify()
+    else:
+        created = False
+        try:
+            with manifest_path.open("xb") as writer:
+                created = True
+                writer.write(raw)
+                writer.flush()
+                os.fsync(writer.fileno())
+        except FileExistsError:
+            verify()
+        except BaseException:
+            # Keep a verified ZIP even if manifest creation fails. A later
+            # idempotent retry may finish the evidence without replacing ZIP.
+            if created:
+                manifest_path.unlink(missing_ok=True)
+            raise
+        verify()
+    return manifest_path, _hash(raw)
 
 
 def preserve(source: Path, destination_dir: Path) -> dict:
@@ -111,6 +171,11 @@ def preserve(source: Path, destination_dir: Path) -> dict:
         _reject_redirected_path(source, "Original artifact")
         _reject_redirected_path(target, "Preservation target")
         verify_existing()
+    # A successful backup is two verified files, not a ZIP plus ephemeral
+    # stdout. Preserve the manifest on first copy and idempotent reruns.
+    manifest_path, manifest_sha = _preserve_integrity_manifest(destination_dir, snapshot)
+    _reject_redirected_path(target, "Preservation target")
+    verify_existing()
     return {
         "schema_version": 1,
         "status": status,
@@ -123,6 +188,8 @@ def preserve(source: Path, destination_dir: Path) -> dict:
         "archive_sha256": ARTIFACT_SHA256,
         "archive_size_bytes": len(snapshot),
         "destination": str(target),
+        "integrity_manifest": str(manifest_path),
+        "integrity_manifest_sha256": manifest_sha,
         "rebuild_performed": False,
         "cas_return_pass": False,
         "real_msix_pass": False,
