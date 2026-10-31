@@ -160,6 +160,45 @@ class MicrosoftGameConfigTests(unittest.TestCase):
         ) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
         self.assertEqual(self.build()["status"], "GDK_CONFIG_CHECK_ONLY")
 
+    def test_png_rgb_valid_transparency_key_accepted(self):
+        p = self.root / "SmallLogo.png"
+        raw = b"".join(b"\x00" + b"\x00" * (44 * 3) for _ in range(44))
+        p.write_bytes(cfg.PNG_SIGNATURE + chunk(
+            b"IHDR", struct.pack(">IIBBBBB", 44, 44, 8, 2, 0, 0, 0)
+        ) + chunk(b"tRNS", b"\x00\x01\x00\x02\x00\x03")
+            + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+        self.assertEqual(self.build()["status"], "GDK_CONFIG_CHECK_ONLY")
+
+    def test_png_rgba_transparency_key_rejected(self):
+        p = self.root / "SmallLogo.png"
+        original = p.read_bytes()
+        ihdr_end = len(cfg.PNG_SIGNATURE) + 12 + 13
+        p.write_bytes(original[:ihdr_end] + chunk(b"tRNS", b"\x00\x01")
+                      + original[ihdr_end:])
+        with self.assertRaisesRegex(ConflictError, "transparency chunk"):
+            self.build()
+
+    def test_png_rgb_malformed_transparency_key_rejected(self):
+        p = self.root / "SmallLogo.png"
+        raw = b"".join(b"\x00" + b"\x00" * (44 * 3) for _ in range(44))
+        p.write_bytes(cfg.PNG_SIGNATURE + chunk(
+            b"IHDR", struct.pack(">IIBBBBB", 44, 44, 8, 2, 0, 0, 0)
+        ) + chunk(b"tRNS", b"\x01\x02\x00\x03\x00\x04")
+            + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+        with self.assertRaisesRegex(ConflictError, "transparency chunk"):
+            self.build()
+
+    def test_png_rgb_transparency_key_after_idat_rejected(self):
+        p = self.root / "SmallLogo.png"
+        raw = b"".join(b"\x00" + b"\x00" * (44 * 3) for _ in range(44))
+        p.write_bytes(cfg.PNG_SIGNATURE + chunk(
+            b"IHDR", struct.pack(">IIBBBBB", 44, 44, 8, 2, 0, 0, 0)
+        ) + chunk(b"IDAT", zlib.compress(raw))
+            + chunk(b"tRNS", b"\x00\x01\x00\x02\x00\x03")
+            + chunk(b"IEND", b""))
+        with self.assertRaisesRegex(ConflictError, "transparency chunk"):
+            self.build()
+
     def test_png_grayscale_8bit_rejected_for_gdk_pixel_format(self):
         p = self.root / "SmallLogo.png"
         raw = b"".join(b"\x00" + b"\x00" * 44 for _ in range(44))
