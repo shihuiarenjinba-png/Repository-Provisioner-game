@@ -879,8 +879,9 @@ class GitHubReturnClient:
         # Signal Sprint is immutable at source_sha. Read the exact commit,
         # not a moving source branch, even if ref checks before/after CAS pass.
         # Keep legacy routes unchanged until their ref contracts are migrated.
-        evidence_ref = (job.source_sha if config.product_type == "GAME"
-                        and job.slug == "signal-sprint" else job.source_branch)
+        is_pinned_gdk = (config.product_type == "GAME" and all(
+            getattr(job, key) == value for key, value in PINNED_SIGNAL_SPRINT_JOB.items()))
+        evidence_ref = job.source_sha if is_pinned_gdk else job.source_branch
         branch = quote(evidence_ref, safe="")
         if config.product_type == "GAME_3D":
             item = self.api(base + f"contents/products/{job.slug}/project.godot?ref=" + branch)
