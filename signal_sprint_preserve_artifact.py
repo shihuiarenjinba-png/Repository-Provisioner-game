@@ -70,7 +70,7 @@ def _preserve_integrity_manifest(destination_dir: Path, snapshot: bytes) -> tupl
         "store_submitted": False,
     }
     raw = (json.dumps(payload, sort_keys=True, ensure_ascii=False,
-                      separators=(",", ":")) + "\\n").encode("utf-8")
+                      separators=(",", ":")) + "\n").encode("utf-8")
 
     def verify() -> None:
         _reject_redirected_path(manifest_path, "Preservation manifest")
