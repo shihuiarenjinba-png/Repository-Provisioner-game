@@ -17,8 +17,9 @@ from urllib.parse import quote
 
 from gdk_build_intake import APPROVED_FIELDS, APPROVED_PATH, EXE_SHA256
 from package_identity_provisioner import (
-    ConflictError, GitHubReturnClient, HoldError, PINNED_SIGNAL_SPRINT_GDK_IDENTITY,
-    PINNED_SIGNAL_SPRINT_JOB, SHA40, _unique_json_object,
+    ConflictError, GitHubReturnClient, HoldError, RetryableError,
+    PINNED_SIGNAL_SPRINT_GDK_IDENTITY, PINNED_SIGNAL_SPRINT_JOB, SHA40,
+    _unique_json_object,
 )
 
 
@@ -113,7 +114,14 @@ def bootstrap_remote_build_branch(cas_sha: str, *, create: bool = False, api=Non
                 or _ref(api, base, cas_branch, missing_ok=True) != cas_sha):
             raise ConflictError("GDK source/CAS remote refs moved before build branch creation")
         # GitHub POST git/refs creates a new ref; no update-ref, no force.
-        api(base + "git/refs", body={"ref": "refs/heads/" + build_branch, "sha": cas_sha})
+        # A concurrent identical create may return HTTP 422, or the response
+        # may be lost after GitHub committed the ref. Reconcile by reading the
+        # actual ref, never by overwriting it or assuming the write succeeded.
+        try:
+            api(base + "git/refs", body={"ref": "refs/heads/" + build_branch, "sha": cas_sha})
+        except (ConflictError, RetryableError):
+            if _ref(api, base, build_branch, missing_ok=True) != cas_sha:
+                raise
 
     # Do not claim success on a stale or concurrently moved branch.
     if (_ref(api, base, source_branch, missing_ok=True) != source
