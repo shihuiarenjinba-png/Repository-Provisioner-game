@@ -153,6 +153,53 @@ class GdkBuildIntakeTests(unittest.TestCase):
         with self.assertRaisesRegex(ConflictError, "CAS/build SHA"):
             intake.create_intake(self.root, self.zip, SOURCE, BUILD)
 
+    def test_pinned_artifact_linked_parent_rejected(self):
+        # A valid ZIP under a redirected ancestor must not be trusted by
+        # Provisioner even when the original digest is unchanged.
+        parent = self.root / "redirected-parent"
+        parent.mkdir()
+        artifact = parent / "pinned.zip"
+        artifact.write_bytes(self.zip.read_bytes())
+        original = Path.is_symlink
+
+        def linked_parent(path):
+            return path == parent or original(path)
+
+        with patch.object(Path, "is_symlink", linked_parent):
+            with self.assertRaisesRegex(ConflictError, "symlink or junction"):
+                intake.inspect_pinned_artifact(artifact)
+
+    def test_pinned_artifact_linked_leaf_rejected(self):
+        original = Path.is_symlink
+
+        def linked_leaf(path):
+            return path == self.zip or original(path)
+
+        with patch.object(Path, "is_symlink", linked_leaf):
+            with self.assertRaisesRegex(ConflictError, "symlink or junction"):
+                intake.inspect_pinned_artifact(self.zip)
+
+    def test_pinned_artifact_parent_redirected_after_snapshot_rejected(self):
+        # Catch a path redirect appearing after the first verified ZIP read.
+        parent = self.root / "late-parent"
+        parent.mkdir()
+        artifact = parent / "pinned.zip"
+        artifact.write_bytes(self.zip.read_bytes())
+        original = Path.is_symlink
+        calls = 0
+
+        def redirected_late(path):
+            nonlocal calls
+            if path == parent:
+                calls += 1
+                return calls >= 2
+            return original(path)
+
+        with patch.object(Path, "is_symlink", redirected_late):
+            with self.assertRaisesRegex(ConflictError, "symlink or junction"):
+                intake.inspect_pinned_artifact(artifact)
+        self.assertGreaterEqual(calls, 2)
+
     def test_pinned_artifact_byte_tampering_rejected(self):
         self.zip.write_bytes(self.zip.read_bytes() + b"tamper")
         with self.assertRaisesRegex(ConflictError, "ZIP bytes changed"):
