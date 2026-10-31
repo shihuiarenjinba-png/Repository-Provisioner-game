@@ -895,9 +895,16 @@ class GitHubReturnClient:
     def _decode_content(item: Any, limit: int) -> bytes:
         if not isinstance(item, dict) or item.get("encoding") != "base64":
             raise ConflictError("Factory product evidence is missing")
+        encoded = item.get("content")
+        # GitHub's Contents API wraps base64 with CR/LF. A strict decoder
+        # rejects legitimate GitHub responses unless those line breaks are
+        # removed. Do not strip spaces, tabs or other non-base64 characters.
+        if type(encoded) is not str or len(encoded) > 2 * limit + 2048:
+            raise ConflictError("Factory product evidence is missing or oversized")
         try:
-            raw = base64.b64decode(item.get("content", ""), validate=True)
-        except Exception as exc:
+            raw = base64.b64decode(encoded.replace("\r", "").replace("\n", ""),
+                                   validate=True)
+        except (ValueError, TypeError, base64.binascii.Error) as exc:
             raise ConflictError("Factory product evidence is not valid base64") from exc
         if len(raw) > limit:
             raise ConflictError("Factory product evidence is oversized")
@@ -911,9 +918,15 @@ class GitHubReturnClient:
         if not isinstance(existing, dict) or existing.get("encoding") != "base64":
             return False
         try:
-            content = json.loads(base64.b64decode(existing["content"], validate=True),
-                                 object_pairs_hook=_unique_json_object)
-        except (KeyError, ValueError, TypeError, json.JSONDecodeError):
+            # Reuse the bounded, GitHub-CR/LF-aware decoder. Otherwise an
+            # identical approved Identity is rejected on a real CAS retry,
+            # even though the same bytes pass in offline unwrapped fixtures.
+            raw = GitHubReturnClient._decode_content(existing, 65_536)
+            content = json.loads(raw.decode("utf-8"),
+                                 object_pairs_hook=_unique_json_object,
+                                 parse_constant=lambda _: (_ for _ in ()).throw(
+                                     ValueError("nonfinite JSON value")))
+        except (ConflictError, KeyError, UnicodeError, ValueError, TypeError):
             return False
         common = {
             "schema_version": SCHEMA_VERSION,
