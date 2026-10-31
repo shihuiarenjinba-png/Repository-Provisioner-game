@@ -33,6 +33,8 @@ class FakeAPI:
         }
         assert set(self.approved) == APPROVED_FIELDS
         self.mutate_after = None
+        self.linewrap = False
+        self.bad_base64 = False
 
     def __call__(self, endpoint, body=None, allow_missing=False):
         self.calls.append((endpoint, body))
@@ -55,8 +57,12 @@ class FakeAPI:
             return {"sha": CAS, "parents": self.parents, "files": self.files}
         if "contents/" + APPROVED_PATH in endpoint:
             assert endpoint.endswith("?ref=" + CAS)
-            return {"encoding": "base64", "content": base64.b64encode(
-                json.dumps(self.approved).encode()).decode()}
+            encoded = base64.b64encode(json.dumps(self.approved).encode()).decode()
+            if self.linewrap:
+                encoded = "\\n".join(encoded[i:i+60] for i in range(0, len(encoded), 60)) + "\\n"
+            if self.bad_base64:
+                encoded = encoded[:10] + "!" + encoded[11:]
+            return {"encoding": "base64", "content": encoded}
         raise AssertionError("Unexpected GitHub API call: " + endpoint)
 
 
@@ -134,6 +140,16 @@ class RemoteBootstrapTests(unittest.TestCase):
             return result
         with self.assertRaisesRegex(ConflictError, "branch moved"):
             remote.bootstrap_remote_build_branch(CAS, create=True, api=moving)
+
+    def test_github_line_wrapped_base64_accepted(self):
+        self.api.linewrap = True
+        self.assertEqual(self.run_gate()["status"], "GDK_REMOTE_BUILD_BRANCH_CHECK_ONLY")
+
+    def test_invalid_base64_rejected_without_write(self):
+        self.api.bad_base64 = True
+        with self.assertRaisesRegex(ConflictError, "base64 invalid"):
+            self.run_gate(create=True)
+        self.assertNotIn(BUILD_BRANCH, self.api.refs)
 
     def test_placeholder_cas_rejected_without_api(self):
         with self.assertRaisesRegex(ConflictError, "actual non-source"):
