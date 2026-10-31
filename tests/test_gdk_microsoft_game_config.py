@@ -154,7 +154,7 @@ class MicrosoftGameConfigTests(unittest.TestCase):
 
     def test_png_rgb_24bpp_accepted(self):
         p = self.root / "SmallLogo.png"
-        raw = b"".join(b"\\x00" + b"\\x00" * (44 * 3) for _ in range(44))
+        raw = b"".join(b"\x00" + b"\x00" * (44 * 3) for _ in range(44))
         p.write_bytes(cfg.PNG_SIGNATURE + chunk(
             b"IHDR", struct.pack(">IIBBBBB", 44, 44, 8, 2, 0, 0, 0)
         ) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
@@ -162,7 +162,7 @@ class MicrosoftGameConfigTests(unittest.TestCase):
 
     def test_png_grayscale_8bit_rejected_for_gdk_pixel_format(self):
         p = self.root / "SmallLogo.png"
-        raw = b"".join(b"\\x00" + b"\\x00" * 44 for _ in range(44))
+        raw = b"".join(b"\x00" + b"\x00" * 44 for _ in range(44))
         p.write_bytes(cfg.PNG_SIGNATURE + chunk(
             b"IHDR", struct.pack(">IIBBBBB", 44, 44, 8, 0, 0, 0, 0)
         ) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
@@ -171,7 +171,7 @@ class MicrosoftGameConfigTests(unittest.TestCase):
 
     def test_png_16bit_rgb_rejected_for_gdk_pixel_format(self):
         p = self.root / "SmallLogo.png"
-        raw = b"".join(b"\\x00" + b"\\x00" * (44 * 6) for _ in range(44))
+        raw = b"".join(b"\x00" + b"\x00" * (44 * 6) for _ in range(44))
         p.write_bytes(cfg.PNG_SIGNATURE + chunk(
             b"IHDR", struct.pack(">IIBBBBB", 44, 44, 16, 2, 0, 0, 0)
         ) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
