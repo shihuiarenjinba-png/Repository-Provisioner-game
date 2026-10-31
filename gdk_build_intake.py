@@ -6,6 +6,8 @@ ancestry before trusting the immutable EXE artifact.
 """
 from __future__ import annotations
 
+from gdk_provenance_timestamp import require_valid_provided_at
+
 import argparse
 import hashlib
 import io
@@ -160,10 +162,7 @@ def verify_cas_checkout(repo: Path, cas_sha: str, build_sha: str) -> dict:
     for field, expected in fixed.items():
         if type(approved.get(field)) is not type(expected) or approved[field] != expected:
             raise ConflictError("GDK approved CAS payload mismatch: " + field)
-    if not isinstance(approved["provided_at"], str) or not re.fullmatch(
-            r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,6})?(?:Z|[+-]\d\d:\d\d)",
-            approved["provided_at"]):
-        raise ConflictError("GDK approved Identity provenance timestamp invalid")
+    require_valid_provided_at(approved.get("provided_at"), label="GDK approved Identity provenance timestamp")
     if type(approved["signature_status"]) is not str or approved["signature_status"] != "QA_UNSIGNED":
         raise ConflictError("GDK pinned EXE signature provenance must remain QA_UNSIGNED")
     # A final-tree comparison alone misses edit-then-revert attacks. Inspect
