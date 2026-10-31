@@ -99,6 +99,12 @@ def _png_dimensions(path: Path) -> tuple[int, int]:
                                          3: (1, 2, 4, 8), 4: (8, 16),
                                          6: (8, 16)}.get(color_type, ())):
                 raise ConflictError("GDK icon invalid PNG IHDR: " + path.name)
+            # Microsoft GDK SubmissionValidator accepts 24-bpp RGB or
+            # 32-bpp RGBA/PARGB artwork. A valid grayscale, indexed, or
+            # 16-bit PNG can pass structural/CRC checks but fail packaging.
+            # Enforce the retail pixel-format contract before staging.
+            if bit_depth != 8 or color_type not in (2, 6):
+                raise ConflictError("GDK icon requires 8-bit RGB or RGBA PNG: " + path.name)
             dims = (width, height)
         elif tag == b"IHDR":
             raise ConflictError("GDK icon duplicate PNG IHDR: " + path.name)

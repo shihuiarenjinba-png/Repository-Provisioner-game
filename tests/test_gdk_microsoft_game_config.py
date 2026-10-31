@@ -152,6 +152,32 @@ class MicrosoftGameConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ConflictError, "invalid PNG chunk type"):
             self.build()
 
+    def test_png_rgb_24bpp_accepted(self):
+        p = self.root / "SmallLogo.png"
+        raw = b"".join(b"\\x00" + b"\\x00" * (44 * 3) for _ in range(44))
+        p.write_bytes(cfg.PNG_SIGNATURE + chunk(
+            b"IHDR", struct.pack(">IIBBBBB", 44, 44, 8, 2, 0, 0, 0)
+        ) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+        self.assertEqual(self.build()["status"], "GDK_CONFIG_CHECK_ONLY")
+
+    def test_png_grayscale_8bit_rejected_for_gdk_pixel_format(self):
+        p = self.root / "SmallLogo.png"
+        raw = b"".join(b"\\x00" + b"\\x00" * 44 for _ in range(44))
+        p.write_bytes(cfg.PNG_SIGNATURE + chunk(
+            b"IHDR", struct.pack(">IIBBBBB", 44, 44, 8, 0, 0, 0, 0)
+        ) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+        with self.assertRaisesRegex(ConflictError, "8-bit RGB or RGBA"):
+            self.build()
+
+    def test_png_16bit_rgb_rejected_for_gdk_pixel_format(self):
+        p = self.root / "SmallLogo.png"
+        raw = b"".join(b"\\x00" + b"\\x00" * (44 * 6) for _ in range(44))
+        p.write_bytes(cfg.PNG_SIGNATURE + chunk(
+            b"IHDR", struct.pack(">IIBBBBB", 44, 44, 16, 2, 0, 0, 0)
+        ) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+        with self.assertRaisesRegex(ConflictError, "8-bit RGB or RGBA"):
+            self.build()
+
     def test_png_grayscale_palette_rejected(self):
         p = self.root / "SmallLogo.png"
         raw = b"".join(b"\x00" + b"\x00" * 44 for _ in range(44))
@@ -159,7 +185,7 @@ class MicrosoftGameConfigTests(unittest.TestCase):
             b"IHDR", struct.pack(">IIBBBBB", 44, 44, 8, 0, 0, 0, 0)
         ) + chunk(b"PLTE", b"\x00\x00\x00")
             + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
-        with self.assertRaisesRegex(ConflictError, "invalid PNG palette"):
+        with self.assertRaisesRegex(ConflictError, "8-bit RGB or RGBA"):
             self.build()
 
     def test_png_indexed_palette_over_bit_depth_rejected(self):
@@ -169,7 +195,7 @@ class MicrosoftGameConfigTests(unittest.TestCase):
             b"IHDR", struct.pack(">IIBBBBB", 44, 44, 1, 3, 0, 0, 0)
         ) + chunk(b"PLTE", b"\x00\x00\x00" * 3)
             + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
-        with self.assertRaisesRegex(ConflictError, "invalid PNG palette"):
+        with self.assertRaisesRegex(ConflictError, "8-bit RGB or RGBA"):
             self.build()
 
     def test_png_missing_idat_rejected_even_with_valid_crc(self):
