@@ -636,6 +636,15 @@ class OfficialIdentityProvider:
                     r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})",
                     provided_at)):
                 raise HoldError("User-provided Identity timestamp must be RFC3339 with timezone")
+            # RFC3339 -00:00 denotes an unknown local offset, not UTC.
+            # Python also normalizes some impossible offsets (e.g. +09:99).
+            # Neither is acceptable as reviewed operator provenance.
+            if provided_at.endswith("-00:00"):
+                raise HoldError("User-provided Identity timezone offset is unknown")
+            if provided_at[-1] != "Z":
+                offset_hour, offset_minute = int(provided_at[-5:-3]), int(provided_at[-2:])
+                if offset_hour > 23 or offset_minute > 59:
+                    raise HoldError("Invalid user-provided Identity timezone offset")
             try:
                 provided_time = datetime.fromisoformat(provided_at.replace("Z", "+00:00"))
             except ValueError as exc:
