@@ -17,7 +17,9 @@ python signal_sprint_preserve_artifact.py --original-zip "C:\\path\\signal-sprin
 
 The tool validates the original ZIP, CRC, member set, provenance, and EXE against pinned SHA-256 constants, then copies **the original ZIP bytes**, without extraction/recompression or EXE rebuild. It uses exclusive creation, never overwrites a conflicting target, verifies the stored copy, and emits JSON. `PRESERVED_VERIFIED` is a successful first copy; `EXISTING_VERIFIED` is a safe idempotent rerun. An error is HOLD/CONFLICT, not success.
 
-The preservation helper now **automatically creates** a portable, strict JSON sidecar named `signal-sprint-original-github-artifact-12706862577.zip.integrity.json` beside the exact ZIP. The manifest binds the immutable source SHA, request ID, original artifact ID, full archive SHA/size, fixed EXE SHA, and explicit false CAS/build/E2E/Store states. The manifest is created exclusively, verified byte-for-byte on idempotent retries, and never overwrites a conflicting manifest. If the ZIP was preserved before this enhancement, an idempotent rerun can add the missing sidecar without replacing the original ZIP. Both files must verify before `PRESERVED_VERIFIED` or `EXISTING_VERIFIED` is reported. This is backup evidence, **not** SDK approval, a Store package, or certification.\n\nKeep the original ZIP and JSON evidence together under owner control. The copy remains a `QA_UNSIGNED` EXE artifact; it is **not** a signed or certifiable GDK package. CAS, Package Version, reserved display name, retail GDK SDK, MSIXVC2 build, Windows QA, and Store submission remain separate gates. This tool does not access Partner Center, change Factory source, perform CAS, or edit the Windows-all-auto ledger.
+The preservation helper now **automatically creates** a portable, strict JSON sidecar named `signal-sprint-original-github-artifact-12706862577.zip.integrity.json` beside the exact ZIP. The manifest binds the immutable source SHA, request ID, original artifact ID, full archive SHA/size, fixed EXE SHA, and explicit false CAS/build/E2E/Store states. The manifest is created exclusively, verified byte-for-byte on idempotent retries, and never overwrites a conflicting manifest. If the ZIP was preserved before this enhancement, an idempotent rerun can add the missing sidecar without replacing the original ZIP. Both files must verify before `PRESERVED_VERIFIED` or `EXISTING_VERIFIED` is reported. This is backup evidence, **not** SDK approval, a Store package, or certification.
+
+Keep the original ZIP and JSON evidence together under owner control. The copy remains a `QA_UNSIGNED` EXE artifact; it is **not** a signed or certifiable GDK package. CAS, Package Version, reserved display name, retail GDK SDK, MSIXVC2 build, Windows QA, and Store submission remain separate gates. This tool does not access Partner Center, change Factory source, perform CAS, or edit the Windows-all-auto ledger.
 
 
 ## Restoring from the rescued GitHub Actions wrapper (2026-10-31)
@@ -48,3 +50,20 @@ Successful statuses are `PRESERVED_VERIFIED` and `EXISTING_VERIFIED`;
 both mean only the local **copy** passed verification, not Store readiness.
 The rescued GitHub Actions artifact is temporary (90-day retention), and
 this helper has not been run against an owner-managed durable destination.
+
+## Read-only backup re-verification without Actions (2026-10-31)
+
+Once the original Actions download has expired, the owner can still verify the
+preserved ZIP and its exact sidecar without having the original download:
+
+```powershell
+python signal_sprint_verify_backup.py --destination-dir "D:\\OwnerBackup\\SignalSprint"
+```
+
+This **does not write or repair anything**. It independently checks the pinned
+archive SHA-256, the original three ZIP members/CRC/provenance and EXE hash via
+the existing inspector, the canonical JSON sidecar bytes, and linked parent
+paths. Missing/corrupted evidence returns HOLD/CONFLICT; success is only
+`SIGNAL_SPRINT_BACKUP_READ_ONLY_VERIFIED`, **not** CAS, SDK, MSIXVC, E2E, or
+Store readiness. The backup must already have been created with the preservation
+helper, and this check does not establish owner-managed durable storage by itself.
