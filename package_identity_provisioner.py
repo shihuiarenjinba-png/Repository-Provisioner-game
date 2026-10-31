@@ -876,7 +876,12 @@ class GitHubReturnClient:
             raise ConflictError("Immutable Signal Sprint source branch moved during CAS resume")
 
     def _verify_product(self, base: str, job: Job, config: ProductConfig) -> None:
-        branch = quote(job.source_branch, safe="")
+        # Signal Sprint is immutable at source_sha. Read the exact commit,
+        # not a moving source branch, even if ref checks before/after CAS pass.
+        # Keep legacy routes unchanged until their ref contracts are migrated.
+        evidence_ref = (job.source_sha if config.product_type == "GAME"
+                        and job.slug == "signal-sprint" else job.source_branch)
+        branch = quote(evidence_ref, safe="")
         if config.product_type == "GAME_3D":
             item = self.api(base + f"contents/products/{job.slug}/project.godot?ref=" + branch)
             if b"run/main_scene" not in self._decode_content(item, 128_000):
