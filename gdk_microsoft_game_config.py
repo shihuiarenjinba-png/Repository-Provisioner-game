@@ -39,8 +39,20 @@ def _sha(path: Path) -> str:
     return h.hexdigest()
 
 
+def _reject_redirected_path(path: Path, label: str) -> None:
+    """Reject linked ancestors as well as linked leaf files in GDK staging."""
+    for component in (path, *path.parents):
+        try:
+            if (component.is_symlink()
+                    or getattr(component, "is_junction", lambda: False)()):
+                raise HoldError(label + " contains symlink or junction")
+        except (OSError, RuntimeError) as exc:
+            raise HoldError(label + " path cannot be inspected") from exc
+
+
 def _regular_file(path: Path, max_size: int) -> None:
-    if path.is_symlink() or not path.is_file() or not 0 < path.stat().st_size <= max_size:
+    _reject_redirected_path(path, "GDK staging input")
+    if not path.is_file() or not 0 < path.stat().st_size <= max_size:
         raise HoldError("GDK staging input missing, linked, empty or oversized: " + path.name)
 
 
@@ -182,15 +194,19 @@ def prepare_config(intake: dict, asset_root: Path, package_version: str, reviewe
     _validate_intake(intake)
     version = _reviewed_version(package_version)
     display = _reviewed_display(reviewed_display_name)
-    if asset_root.is_symlink() or not asset_root.is_dir():
+    _reject_redirected_path(asset_root, "GDK staging root")
+    if not asset_root.is_dir():
         raise HoldError("GDK staging content directory is unavailable or linked")
     exe = asset_root / "SignalSprint.exe"
     _regular_file(exe, 40_000_000)
     if _sha(exe) != EXE_SHA256:
         raise ConflictError("GDK staged EXE differs from immutable artifact bytes")
+    _reject_redirected_path(exe, "GDK staged EXE")
     for _, (name, dims) in ASSETS.items():
-        if _png_dimensions(asset_root / name) != dims:
+        icon = asset_root / name
+        if _png_dimensions(icon) != dims:
             raise ConflictError("GDK icon dimensions mismatch: " + name)
+        _reject_redirected_path(icon, "GDK staged icon")
 
     identity = PINNED_SIGNAL_SPRINT_GDK_IDENTITY
     game = ET.Element("Game", {"configVersion": "1"})
@@ -256,6 +272,7 @@ def main(argv=None) -> int:
         if args.write_staging_config:
             target = args.asset_root / "MicrosoftGame.config"
             # Exclusive creation only; never overwrite an existing config.
+            _reject_redirected_path(target, "GDK config destination")
             with target.open("xb") as output:
                 output.write(result["microsoft_game_config_xml"].encode("utf-8"))
             result["config_path"] = str(target)
