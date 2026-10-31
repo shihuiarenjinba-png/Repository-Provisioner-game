@@ -45,7 +45,7 @@ def _reject_redirected_path(path: Path, label: str) -> None:
         try:
             if (component.is_symlink()
                     or getattr(component, "is_junction", lambda: False)()):
-                raise HoldError(label + " contains symlink or junction")
+                raise HoldError(label + " linked path (symlink or junction)")
         except (OSError, RuntimeError) as exc:
             raise HoldError(label + " path cannot be inspected") from exc
 
