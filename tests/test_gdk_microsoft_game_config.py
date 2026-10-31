@@ -212,6 +212,31 @@ class MicrosoftGameConfigTests(unittest.TestCase):
         (self.root / "SignalSprint.exe").symlink_to(self.root / "real.exe")
         with self.assertRaisesRegex(HoldError, "linked"): self.build()
 
+    def test_symlinked_icon_rejected(self):
+        icon = self.root / "SmallLogo.png"
+        actual = self.root / "actual-small-logo.png"
+        icon.rename(actual)
+        try:
+            icon.symlink_to(actual)
+        except (OSError, NotImplementedError):
+            self.skipTest("Runner cannot create symlinks")
+        with self.assertRaisesRegex(HoldError, "symlink or junction"):
+            self.build()
+
+    def test_symlinked_staging_ancestor_rejected(self):
+        # The staging directory itself is ordinary, but its parent is a link.
+        linked_parent = self.root.parent / (self.root.name + "-linked-parent")
+        try:
+            linked_parent.symlink_to(self.root.parent, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("Runner cannot create symlinks")
+        self.addCleanup(linked_parent.unlink)
+        redirected_root = linked_parent / self.root.name
+        self.assertFalse(redirected_root.is_symlink())
+        with self.assertRaisesRegex(HoldError, "symlink or junction"):
+            cfg.prepare_config(self.intake, redirected_root, "1.0.1.0",
+                               "Signal Sprint (reviewed fixture)")
+
     def test_false_downstream_success_rejected(self):
         self.intake["real_msixvc_built"] = True
         with self.assertRaisesRegex(ConflictError, "downstream"): self.build()
