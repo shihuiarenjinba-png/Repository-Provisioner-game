@@ -7,6 +7,8 @@ The original source ref is immutable and is never updated by this tool.
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import json
 import re
 import sys
@@ -35,7 +37,17 @@ def _ref(api, base: str, branch: str, *, missing_ok: bool = False) -> str | None
 
 def _approved(api, base: str, cas_sha: str) -> None:
     item = api(base + "contents/" + APPROVED_PATH + "?ref=" + quote(cas_sha, safe=""))
-    raw = GitHubReturnClient._decode_content(item, 65_536)
+    # GitHub's REST contents API inserts CR/LF in its base64 payload.
+    # Strip only those documented line breaks, then strictly validate bytes.
+    encoded = item.get("content") if isinstance(item, dict) and item.get("encoding") == "base64" else None
+    if type(encoded) is not str or len(encoded) > 90_000:
+        raise ConflictError("GDK remote CAS Identity content missing or oversized")
+    try:
+        raw = base64.b64decode(encoded.replace("\\r", "").replace("\\n", ""), validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ConflictError("GDK remote CAS Identity base64 invalid") from exc
+    if not 0 < len(raw) <= 65_536:
+        raise ConflictError("GDK remote CAS Identity decoded size invalid")
     try:
         approved = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_json_object,
                               parse_constant=lambda _: (_ for _ in ()).throw(ValueError("nonfinite")))
