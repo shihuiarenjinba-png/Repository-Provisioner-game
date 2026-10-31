@@ -21,9 +21,12 @@ TARGET = "products/signal-sprint/store/approved-identity.json"
 CAS_BRANCH = "codex/game-signal-sprint-gdk-cas-" + SOURCE[:12]
 
 
-def encoded(value):
-    return {"encoding": "base64", "content": base64.b64encode(
-        json.dumps(value).encode("utf-8")).decode("ascii")}
+def encoded(value, *, wrapped=False):
+    content = base64.b64encode(json.dumps(value).encode("utf-8")).decode("ascii")
+    if wrapped:
+        # GitHub REST Contents API inserts CR/LF into long base64 strings.
+        content = "\r\n".join(content[i:i + 60] for i in range(0, len(content), 60)) + "\r\n"
+    return {"encoding": "base64", "content": content}
 
 
 class GdkCasResumeProvenanceTests(unittest.TestCase):
@@ -72,7 +75,7 @@ class GdkCasResumeProvenanceTests(unittest.TestCase):
 
     def resume(self, *, parent=SOURCE, extra_file=False,
                changed_ref=False, missing_commit=False, current_head=CAS,
-               source_moved=False):
+               source_moved=False, wrapped=False, invalid_base64=False):
         calls = []
         refs = 0
 
@@ -87,13 +90,16 @@ class GdkCasResumeProvenanceTests(unittest.TestCase):
                 refs += 1
                 return {"object": {"sha": OTHER if changed_ref and refs > 1 else current_head}}
             if "/manifest.json" in endpoint:
-                return encoded({"slug": "signal-sprint", "kind": "game"})
+                return encoded({"slug": "signal-sprint", "kind": "game"}, wrapped=wrapped)
             if "/proposals/" in endpoint:
-                return encoded({"slug": "signal-sprint", "title": "Signal Sprint - Offline Route Puzzle"})
+                return encoded({"slug": "signal-sprint", "title": "Signal Sprint - Offline Route Puzzle"}, wrapped=wrapped)
             if "/approved-identity.json" in endpoint:
                 self.assertIn("?ref=" + current_head, endpoint,
                               "GDK contents read must pin observed commit")
-                return encoded(self.approved)
+                response = encoded(self.approved, wrapped=wrapped)
+                if invalid_base64:
+                    response["content"] += "\t"
+                return response
             if "/commits/" in endpoint:
                 if missing_commit:
                     return {}
@@ -116,6 +122,30 @@ class GdkCasResumeProvenanceTests(unittest.TestCase):
         self.assertEqual(result["branch"], CAS_BRANCH)
         self.assertEqual(refs, 2, "CAS branch must be rechecked after commit inspection")
         self.assertFalse(any(endpoint == "graphql" for endpoint in calls))
+
+    def test_real_github_wrapped_base64_is_idempotent(self):
+        # Exercise manifest, proposal and existing approved Identity through
+        # the complete read-only resume path, not just a standalone decoder.
+        result, calls, refs = self.resume(wrapped=True)
+        self.assertEqual(result["status"], "EXISTING_VERIFIED")
+        self.assertEqual(result["commit_sha"], CAS)
+        self.assertEqual(refs, 2)
+        self.assertFalse(any(endpoint == "graphql" for endpoint in calls))
+
+    def test_github_contents_non_crlf_whitespace_rejected(self):
+        with self.assertRaisesRegex(ConflictError, "not valid base64"):
+            GitHubReturnClient._decode_content(
+                {"encoding": "base64", "content": encoded(
+                    {"slug": "signal-sprint"}, wrapped=True)["content"] + "\t"}, 16_000)
+
+    def test_existing_identity_invalid_base64_is_conflict_not_resume(self):
+        with self.assertRaisesRegex(ConflictError, "already exists"):
+            self.resume(wrapped=True, invalid_base64=True)
+
+    def test_oversized_github_contents_rejected_before_decode(self):
+        with self.assertRaisesRegex(ConflictError, "oversized"):
+            GitHubReturnClient._decode_content(
+                {"encoding": "base64", "content": "A" * 5000}, 100)
 
     def test_matching_identity_with_changed_source_history_is_conflict(self):
         with self.assertRaisesRegex(ConflictError, "directly descend"):
