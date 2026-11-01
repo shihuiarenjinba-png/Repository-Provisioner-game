@@ -213,6 +213,59 @@ def _validate_intake(intake: dict) -> None:
             raise ConflictError("GDK intake missing actual CAS/build SHA")
 
 
+def verify_staging_inputs(asset_root: Path, contract: dict, *, require_config: bool = False) -> dict:
+    """Recheck exact staged bytes immediately before a future GDK SDK build.
+
+    This is a byte-integrity handoff, NOT an SDK validation or MSIXVC success.
+    The caller must preserve the reviewed contract independently of the staging
+    directory and run this again immediately before invoking MakePkg.
+    """
+    if (type(contract) is not dict or contract.get("status") != "GDK_CONFIG_CHECK_ONLY"
+            or contract.get("partner_center_selection") != "GDK_GAME"
+            or contract.get("request_id") != PINNED_SIGNAL_SPRINT_JOB["request_id"]
+            or contract.get("source_sha") != PINNED_SIGNAL_SPRINT_JOB["source_sha"]
+            or contract.get("pinned_exe_sha256") != EXE_SHA256
+            or any(type(contract.get(k)) is not str or not re.fullmatch(r"[0-9a-f]{40}", contract[k])
+                   for k in ("cas_commit_sha", "factory_head_sha"))
+            or contract.get("gdk_sdk_validated") is not False
+            or contract.get("real_msixvc_built") is not False
+            or contract.get("store_submitted") is not False):
+        raise ConflictError("GDK staging handoff contract provenance mismatch")
+    expected_names = {"SignalSprint.exe", *(name for name, _ in ASSETS.values())}
+    hashes = contract.get("staging_sha256")
+    if (type(hashes) is not dict or set(hashes) != expected_names
+            or hashes.get("SignalSprint.exe") != EXE_SHA256
+            or any(type(v) is not str or not re.fullmatch(r"[0-9a-f]{64}", v)
+                   for v in hashes.values())):
+        raise ConflictError("GDK staging handoff digest manifest invalid")
+    _reject_redirected_path(asset_root, "GDK staging root")
+    if not asset_root.is_dir():
+        raise HoldError("GDK staging root unavailable")
+    for name in sorted(expected_names):
+        path = asset_root / name
+        _regular_file(path, 40_000_000 if name == "SignalSprint.exe" else 20_000_000)
+        if _sha(path) != hashes[name]:
+            raise ConflictError("GDK staging bytes changed after preflight: " + name)
+        _reject_redirected_path(path, "GDK staged file")
+    if require_config:
+        xml = contract.get("microsoft_game_config_xml")
+        digest = contract.get("microsoft_game_config_sha256")
+        if (type(xml) is not str or type(digest) is not str
+                or hashlib.sha256(xml.encode("utf-8")).hexdigest() != digest):
+            raise ConflictError("GDK reviewed config contract digest mismatch")
+        path = asset_root / "MicrosoftGame.config"
+        _regular_file(path, 2_000_000)
+        if _sha(path) != digest:
+            raise ConflictError("GDK staged MicrosoftGame.config bytes changed")
+        _reject_redirected_path(path, "GDK staged config")
+    return {"status": "GDK_STAGING_BYTES_VERIFIED", "request_id": contract["request_id"],
+            "source_sha": contract["source_sha"],
+            "cas_commit_sha": contract["cas_commit_sha"],
+            "factory_head_sha": contract["factory_head_sha"],
+            "gdk_sdk_validated": False, "real_msixvc_built": False,
+            "store_submitted": False}
+
+
 def prepare_config(intake: dict, asset_root: Path, package_version: str, reviewed_display_name: str) -> dict:
     """Return validated XML and machine-readable build contract; no writes."""
     _validate_intake(intake)
@@ -226,11 +279,18 @@ def prepare_config(intake: dict, asset_root: Path, package_version: str, reviewe
     if _sha(exe) != EXE_SHA256:
         raise ConflictError("GDK staged EXE differs from immutable artifact bytes")
     _reject_redirected_path(exe, "GDK staged EXE")
+    staging_hashes = {"SignalSprint.exe": EXE_SHA256}
     for _, (name, dims) in ASSETS.items():
         icon = asset_root / name
+        _regular_file(icon, 20_000_000)
+        digest_before = _sha(icon)
         if _png_dimensions(icon) != dims:
             raise ConflictError("GDK icon dimensions mismatch: " + name)
         _reject_redirected_path(icon, "GDK staged icon")
+        digest_after = _sha(icon)
+        if digest_after != digest_before:
+            raise ConflictError("GDK icon changed during PNG validation: " + name)
+        staging_hashes[name] = digest_after
 
     identity = PINNED_SIGNAL_SPRINT_GDK_IDENTITY
     game = ET.Element("Game", {"configVersion": "1"})
@@ -263,7 +323,7 @@ def prepare_config(intake: dict, asset_root: Path, package_version: str, reviewe
             or parsed.find("TitleId") is not None
             or parsed.find("MSAAppId") is not None):
         raise ConflictError("GDK generated config round-trip mismatch")
-    return {"schema_version": 1, "status": "GDK_CONFIG_CHECK_ONLY",
+    result = {"schema_version": 1, "status": "GDK_CONFIG_CHECK_ONLY",
         "partner_center_selection": "GDK_GAME", "packaging_family": "GDK",
         "package_format": "MSIXVC_OR_MSIXVC2", "package_version": version,
         "request_id": PINNED_SIGNAL_SPRINT_JOB["request_id"],
@@ -271,10 +331,13 @@ def prepare_config(intake: dict, asset_root: Path, package_version: str, reviewe
         "cas_commit_sha": intake["cas_commit_sha"],
         "factory_head_sha": intake["factory_head_sha"],
         "pinned_exe_sha256": EXE_SHA256,
+        "staging_sha256": staging_hashes,
         "microsoft_game_config_sha256": hashlib.sha256(xml_bytes).hexdigest(),
         "microsoft_game_config_xml": xml_bytes.decode("utf-8"),
         "next_stage": "GDK_SDK_VALIDATE_THEN_MAKEPKG_PC",
         "gdk_sdk_validated": False, "real_msixvc_built": False, "store_submitted": False}
+    verify_staging_inputs(asset_root, result)
+    return result
 
 
 def main(argv=None) -> int:
