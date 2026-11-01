@@ -51,13 +51,13 @@ def parse_original_job_log(raw: bytes) -> dict:
         log = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise EvidenceError("original job log not UTF-8") from exc
-    prefix = r"^20\\d{2}-[^\\r\\n]*?Z[ \\t]+"
-    exe_build = _unique(log, prefix + r"GAME_UNSIGNED_EXE_SHA256=([0-9a-f]{64})[ \\t]*\\r?$", "build EXE")
-    exe_verify = _unique(log, prefix + r"GAME EXE SHA256:[ \\t]*([0-9a-f]{64})[ \\t]*\\r?$", "verification EXE")
-    zip_digest = _unique(log, prefix + r"SHA256 digest of uploaded artifact zip is[ \\t]+([0-9a-f]{64})[ \\t]*\\r?$", "uploaded ZIP")
-    artifact_id = _unique(log, prefix + r"Artifact ID(?: is)?[ \\t]+([0-9]+)\\b[^\\r\\n]*\\r?$", "artifact ID")
-    source = _unique(log, prefix + r"[ \\t]*name:[ \\t]*game-signal-sprint-exe-([0-9a-f]{40})[ \\t]*\\r?$", "artifact source")
-    git_source = _unique(log, r"\\+([0-9a-f]{40}):refs/remotes/origin/codex/game-signal-sprint-undo-20261027", "checked-out source")
+    prefix = r"^20\d{2}-[^\r\n]*?Z[ \t]+"
+    exe_build = _unique(log, prefix + r"GAME_UNSIGNED_EXE_SHA256=([0-9a-f]{64})[ \t]*\r?$", "build EXE")
+    exe_verify = _unique(log, prefix + r"GAME EXE SHA256:[ \t]*([0-9a-f]{64})[ \t]*\r?$", "verification EXE")
+    zip_digest = _unique(log, prefix + r"SHA256 digest of uploaded artifact zip is[ \t]+([0-9a-f]{64})[ \t]*\r?$", "uploaded ZIP")
+    artifact_id = _unique(log, prefix + r"Artifact ID(?: is)?[ \t]+([0-9]+)\b[^\r\n]*\r?$", "artifact ID")
+    source = _unique(log, prefix + r"[ \t]*name:[ \t]*game-signal-sprint-exe-([0-9a-f]{40})[ \t]*\r?$", "artifact source")
+    git_source = _unique(log, r"\+([0-9a-f]{40}):refs/remotes/origin/codex/game-signal-sprint-undo-20261027", "checked-out source")
     if exe_build != exe_verify:
         raise EvidenceError("build and verification EXE digests disagree")
     if source != PINNED_SIGNAL_SPRINT_JOB["source_sha"] or git_source != source:
