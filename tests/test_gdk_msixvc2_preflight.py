@@ -31,9 +31,18 @@ class GdkMsixvc2PreflightTests(unittest.TestCase):
             "store_submitted": False,
         }
         self.intake = {"pinned_exe": {"artifact_zip_sha256": "a" * 64}}
+        self.branch_receipt = {
+            "status": "GDK_BUILD_BRANCH_CHECK_ONLY",
+            "partner_center_selection": "GDK_GAME",
+            "build_branch": "codex/game-signal-sprint-gdk-build-test",
+            "approved_identity_blob_sha": "d" * 40,
+            "gdk_sdk_validated": False, "real_msixvc_built": False,
+            "store_submitted": False,
+        }
         for name, value in (
             ("EXE_SHA256", hashlib.sha256(self.exe).hexdigest()),
             ("create_intake", lambda *args: self.intake),
+            ("verify_build_branch", lambda *args: self.branch_receipt),
             ("prepare_config", lambda *args: self.config),
         ):
             p = patch.object(gate, name, value)
@@ -51,11 +60,28 @@ class GdkMsixvc2PreflightTests(unittest.TestCase):
         self.assertEqual(result["partner_center_selection"], "GDK_GAME")
         self.assertEqual(result["package_format"], "MSIXVC2")
         self.assertEqual(result["source_sha"], PINNED_SIGNAL_SPRINT_JOB["source_sha"])
+        self.assertEqual(result["build_branch"], self.branch_receipt["build_branch"])
+        self.assertEqual(result["approved_identity_blob_sha"], "d" * 40)
         self.assertEqual(result["staging_files_sha256"]["SignalSprint.exe"], gate.EXE_SHA256)
         self.assertEqual(set(result["staging_files_sha256"]), set(gate.MAX_FILE_BYTES))
         self.assertFalse(result["gdk_sdk_validated"])
         self.assertFalse(result["real_msixvc_built"])
         self.assertFalse(result["store_submitted"])
+
+    def test_missing_dedicated_branch_gate_rejected(self):
+        self.branch_receipt["status"] = "UNVERIFIED"
+        with self.assertRaisesRegex(ConflictError, "branch gate"):
+            self.run_gate()
+
+    def test_false_sdk_success_in_branch_receipt_rejected(self):
+        self.branch_receipt["gdk_sdk_validated"] = True
+        with self.assertRaisesRegex(ConflictError, "branch gate"):
+            self.run_gate()
+
+    def test_actual_branch_policy_conflict_propagates(self):
+        with patch.object(gate, "verify_build_branch", side_effect=ConflictError("wrong build branch")):
+            with self.assertRaisesRegex(ConflictError, "wrong build branch"):
+                self.run_gate()
 
     def test_extra_payload_rejected(self):
         (self.root / "surprise.dll").write_bytes(b"extra")
