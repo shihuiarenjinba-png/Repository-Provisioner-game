@@ -15,6 +15,7 @@ import stat
 import sys
 
 from gdk_build_intake import create_intake, EXE_SHA256
+from gdk_build_branch_gate import verify_build_branch
 from gdk_microsoft_game_config import ASSETS, prepare_config
 from package_identity_provisioner import ConflictError, HoldError, PINNED_SIGNAL_SPRINT_JOB
 
@@ -65,6 +66,16 @@ def create_preflight(
     factory_checkout: Path, artifact_zip: Path, cas_sha: str, build_sha: str,
     staging_dir: Path, package_version: str, reviewed_display_name: str,
 ) -> dict:
+    # A valid CAS receipt alone cannot authorize packaging from an arbitrary
+    # checkout. Enforce the dedicated clean post-CAS build branch here, not
+    # merely in a separate optional CLI step. Recheck repeats this gate.
+    branch_receipt = verify_build_branch(factory_checkout, cas_sha, build_sha)
+    if (branch_receipt.get("status") != "GDK_BUILD_BRANCH_CHECK_ONLY"
+            or branch_receipt.get("partner_center_selection") != "GDK_GAME"
+            or branch_receipt.get("gdk_sdk_validated") is not False
+            or branch_receipt.get("real_msixvc_built") is not False
+            or branch_receipt.get("store_submitted") is not False):
+        raise ConflictError("GDK dedicated build branch gate did not pass")
     intake = create_intake(factory_checkout, artifact_zip, cas_sha, build_sha)
     config = prepare_config(intake, staging_dir, package_version, reviewed_display_name)
     if (config.get("status") != "GDK_CONFIG_CHECK_ONLY"
@@ -86,6 +97,8 @@ def create_preflight(
         "source_sha": PINNED_SIGNAL_SPRINT_JOB["source_sha"],
         "cas_commit_sha": cas_sha,
         "factory_head_sha": build_sha,
+        "build_branch": branch_receipt["build_branch"],
+        "approved_identity_blob_sha": branch_receipt["approved_identity_blob_sha"],
         "package_version": config["package_version"],
         "pinned_artifact_zip_sha256": intake["pinned_exe"]["artifact_zip_sha256"],
         "pinned_exe_sha256": EXE_SHA256,
