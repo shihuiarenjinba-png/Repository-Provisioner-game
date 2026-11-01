@@ -282,6 +282,7 @@ def prepare_config(intake: dict, asset_root: Path, package_version: str, reviewe
     staging_hashes = {"SignalSprint.exe": EXE_SHA256}
     for _, (name, dims) in ASSETS.items():
         icon = asset_root / name
+        _regular_file(icon, 20_000_000)
         digest_before = _sha(icon)
         if _png_dimensions(icon) != dims:
             raise ConflictError("GDK icon dimensions mismatch: " + name)
