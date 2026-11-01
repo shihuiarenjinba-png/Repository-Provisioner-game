@@ -178,7 +178,16 @@ def _reviewed_version(value: str) -> str:
 
 
 def _reviewed_display(value: str) -> str:
-    if not isinstance(value, str) or not 1 <= len(value) <= 100 or value != value.strip() or any(ord(c) < 32 for c in value):
+    if (not isinstance(value, str) or not 1 <= len(value) <= 100
+            or value != value.strip()
+            or any(not (0x20 <= ord(c) <= 0xD7FF
+                        or 0xE000 <= ord(c) <= 0xFFFD
+                        or 0x10000 <= ord(c) <= 0x10FFFF)
+                   for c in value)):
+        # ElementTree can serialize surrogate code points as character
+        # references and U+FFFE/U+FFFF as raw UTF-8, but neither is valid
+        # XML 1.0. Reject before generating MicrosoftGame.config so a
+        # malformed reviewed name yields a classified HOLD, not ParseError.
         raise HoldError("Reviewed Partner Center display name is required at build gate")
     return value
 
