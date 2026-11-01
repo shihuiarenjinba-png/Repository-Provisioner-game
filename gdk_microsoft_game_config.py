@@ -262,7 +262,20 @@ def verify_staging_inputs(asset_root: Path, contract: dict, *, require_config: b
     The caller must preserve the reviewed contract independently of the staging
     directory and run this again immediately before invoking MakePkg.
     """
-    if (type(contract) is not dict or contract.get("status") != "GDK_CONFIG_CHECK_ONLY"
+    # The SDK handoff must not silently reinterpret a valid digest manifest
+    # as another schema, packaging route, or downstream stage.
+    routing = {
+        "schema_version": 1,
+        "packaging_family": "GDK",
+        "package_format": "MSIXVC_OR_MSIXVC2",
+        "next_stage": "GDK_SDK_VALIDATE_THEN_MAKEPKG_PC",
+    }
+    if type(contract) is not dict or any(
+            type(contract.get(key)) is not type(expected)
+            or contract[key] != expected
+            for key, expected in routing.items()):
+        raise ConflictError("GDK staging handoff routing/schema mismatch")
+    if (contract.get("status") != "GDK_CONFIG_CHECK_ONLY"
             or contract.get("partner_center_selection") != "GDK_GAME"
             or contract.get("request_id") != PINNED_SIGNAL_SPRINT_JOB["request_id"]
             or contract.get("source_sha") != PINNED_SIGNAL_SPRINT_JOB["source_sha"]
