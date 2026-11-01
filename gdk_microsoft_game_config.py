@@ -398,6 +398,11 @@ def main(argv=None) -> int:
             _reject_redirected_path(target, "GDK config destination")
             with target.open("xb") as output:
                 output.write(result["microsoft_game_config_xml"].encode("utf-8"))
+            # A successful exclusive create is not proof that the staged XML
+            # still matches the reviewed contract. Re-read its bytes and all
+            # pinned assets before reporting a written config to the caller.
+            # The SDK consumer repeats this check at its own trust boundary.
+            verify_staging_inputs(args.asset_root, result, require_config=True)
             result["config_path"] = str(target)
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 0
