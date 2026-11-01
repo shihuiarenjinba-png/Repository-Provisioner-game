@@ -57,6 +57,12 @@ def recovery_receipt(candidates: list[Path], search_dirs: list[Path]) -> dict:
             "zip_matches_repository": entry.get("zip_sha256") == ARTIFACT_SHA256,
             "exe_matches_repository": entry.get("exe_sha256") == EXE_SHA256,
             "provenance_matches_repository": entry.get("provenance_match") is True,
+            "provenance_sha256": entry.get("provenance_sha256"),
+            "request_sha256": entry.get("request_sha256"),
+            "provenance_exe_sha256": entry.get("provenance_exe_sha256"),
+            "provenance_matches_exe_bytes": entry.get("provenance_matches_exe_bytes") is True,
+            "provenance_matches_source": entry.get("provenance_matches_source") is True,
+            "request_matches_source": entry.get("request_matches_source") is True,
             "reason": entry.get("reason"),
         })
     evidence = {
