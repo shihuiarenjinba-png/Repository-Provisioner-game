@@ -69,9 +69,12 @@ class GdkCasCreateReconcileTests(unittest.TestCase):
                 if mode == "lost_response":
                     refs[CAS_BRANCH] = SOURCE
                     raise RetryableError("GitHub API timed out")
-                if mode == "concurrent_same":
+                if mode == "concurrent_same" or mode.startswith("postwrite_"):
                     refs[CAS_BRANCH] = SOURCE
-                    raise ConflictError("HTTP 422")
+                    if mode == "concurrent_same":
+                        raise ConflictError("HTTP 422")
+                    return {"ref": "refs/heads/" + CAS_BRANCH,
+                            "object": {"sha": SOURCE}}
                 if mode == "concurrent_other":
                     refs[CAS_BRANCH] = OTHER
                     raise ConflictError("HTTP 422")
