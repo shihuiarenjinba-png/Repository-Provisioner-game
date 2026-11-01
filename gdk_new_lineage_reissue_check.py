@@ -17,8 +17,8 @@ import sys
 import zipfile
 
 from gdk_build_intake import ARTIFACT_SHA256, EXE_SHA256, _json
-from gdk_exact_bytes_recovery_receipt import ORIGINAL_ARTIFACT_ID
-from package_identity_provisioner import PINNED_SIGNAL_SPRINT_JOB, PINNED_SIGNAL_SPRINT_GDK_IDENTITY
+from gdk_exact_bytes_recovery_receipt import ORIGINAL_ARTIFACT_ID, HANDOFF_EXE_SHA256
+from package_identity_provisioner import (PINNED_SIGNAL_SPRINT_JOB, PINNED_SIGNAL_SPRINT_GDK_IDENTITY, ConflictError)
 
 SOURCE = PINNED_SIGNAL_SPRINT_JOB["source_sha"]
 OLD_REQUEST = PINNED_SIGNAL_SPRINT_JOB["request_id"]
@@ -29,7 +29,8 @@ MEMBERS = {"SignalSprint.exe", "provenance.json", "provisioner-request.json"}
 FIELDS = {"schema_version", "decision", "product", "partner_center_selection",
           "source_sha", "source_branch", "original_request_id", "original_artifact_id",
           "new_request_id", "build_id", "workflow_run_id", "artifact_id",
-          "zip_sha256", "exe_sha256", "reviewed_by", "reviewed_at"}
+          "zip_sha256", "exe_sha256", "reviewed_by", "reviewed_at",
+          "store_id", "xbox_title_id", "xbox_scid", "msa_app_id"}
 HEX64 = re.compile(r"[0-9a-f]{64}")
 REVIEWED_AT = re.compile(r"20\d\d-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,6})?(?:Z|[+-]\d\d:\d\d)")
 
@@ -62,7 +63,7 @@ def _safe_regular(path: Path, maximum: int) -> bytes:
 def _proposal(raw: bytes) -> dict:
     try:
         data = _json(raw)
-    except (ValueError, TypeError) as exc:
+    except (ValueError, TypeError, ConflictError) as exc:
         raise ReissueHold("INVALID_PROPOSAL_JSON") from exc
     if set(data) != FIELDS:
         raise ReissueHold("PROPOSAL_SCHEMA_MISMATCH")
@@ -75,6 +76,10 @@ def _proposal(raw: bytes) -> dict:
         "source_branch": PINNED_SIGNAL_SPRINT_JOB["source_branch"],
         "original_request_id": OLD_REQUEST,
         "original_artifact_id": ORIGINAL_ARTIFACT_ID,
+        "store_id": PINNED_SIGNAL_SPRINT_GDK_IDENTITY["store_id"],
+        "xbox_title_id": PINNED_SIGNAL_SPRINT_GDK_IDENTITY["xbox_title_id"],
+        "xbox_scid": PINNED_SIGNAL_SPRINT_GDK_IDENTITY["xbox_scid"],
+        "msa_app_id": PINNED_SIGNAL_SPRINT_GDK_IDENTITY["msa_app_id"],
     }
     if any(type(data[k]) is not type(v) or data[k] != v for k, v in expected.items()):
         raise ReissueHold("ORIGINAL_SOURCE_OR_PRODUCT_MISMATCH")
@@ -89,7 +94,8 @@ def _proposal(raw: bytes) -> dict:
         raise ReissueHold("NEW_LINEAGE_ID_NOT_DISTINCT")
     for field, old in (("zip_sha256", ARTIFACT_SHA256), ("exe_sha256", EXE_SHA256)):
         value = data[field]
-        if not isinstance(value, str) or not HEX64.fullmatch(value) or value == old:
+        if not isinstance(value, str) or not HEX64.fullmatch(value) or value == old
+                or (field == "exe_sha256" and value == HANDOFF_EXE_SHA256):
             raise ReissueHold("NEW_LINEAGE_DIGEST_MISSING_OR_REUSED")
     if (not isinstance(data["reviewed_by"], str)
             or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.@ -]{2,99}", data["reviewed_by"])
@@ -125,7 +131,7 @@ def _inspect_archive(raw: bytes, proposal: dict) -> dict:
             provenance = _json(archive.read("provenance.json"))
             request = _json(archive.read("provisioner-request.json"))
     except (OSError, ValueError, RuntimeError, EOFError, zipfile.BadZipFile,
-            zipfile.LargeZipFile) as exc:
+            zipfile.LargeZipFile, ConflictError) as exc:
         raise ReissueHold("NEW_ARCHIVE_INVALID") from exc
     required = {**PINNED_SIGNAL_SPRINT_JOB, "request_id": proposal["new_request_id"]}
     lineage = {"build_id": proposal["build_id"], "workflow_run_id": proposal["workflow_run_id"],
