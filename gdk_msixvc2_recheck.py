@@ -35,7 +35,10 @@ def read_receipt(path: Path) -> tuple[dict, bytes]:
         raw = path.read_bytes()
         if len(raw) != size:
             raise ConflictError("GDK receipt changed while reading")
+        # The generated preflight schema has no floating-point fields.
+        # Reject them before canonicalization, including 1e999 -> infinity.
         data = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_json_object,
+                          parse_float=lambda _: (_ for _ in ()).throw(ValueError("float JSON")),
                           parse_constant=lambda _: (_ for _ in ()).throw(ValueError("non-finite JSON")))
     except (OSError, UnicodeError, ValueError, RecursionError) as exc:
         raise ConflictError("GDK receipt unreadable, malformed or ambiguous") from exc
