@@ -334,7 +334,7 @@ class MicrosoftGameConfigTests(unittest.TestCase):
         config = self.root / "MicrosoftGame.config"
         with self.assertRaisesRegex(HoldError, "missing"):
             cfg.verify_staging_inputs(self.root, result, require_config=True)
-        config.write_text(result["microsoft_game_config_xml"], encoding="utf-8")
+        config.write_bytes(result["microsoft_game_config_xml"].encode("utf-8"))
         self.assertEqual(cfg.verify_staging_inputs(self.root, result, require_config=True)["status"],
                          "GDK_STAGING_BYTES_VERIFIED")
         config.write_bytes(config.read_bytes() + b"changed")
