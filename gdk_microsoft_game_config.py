@@ -192,6 +192,48 @@ def _reviewed_display(value: str) -> str:
     return value
 
 
+def _render_reviewed_config(version: str, display: str) -> bytes:
+    """Deterministically render the pinned retail XML from reviewed inputs.
+
+    The same renderer is used at preparation and at SDK handoff, so a JSON
+    digest recomputed over altered XML cannot bypass Identity validation.
+    """
+    version = _reviewed_version(version)
+    display = _reviewed_display(display)
+    identity = PINNED_SIGNAL_SPRINT_GDK_IDENTITY
+    game = ET.Element("Game", {"configVersion": "1"})
+    ET.SubElement(game, "Identity", {"Name": identity["name"], "Publisher": identity["publisher"], "Version": version})
+    ET.SubElement(game, "StoreId").text = identity["store_id"]
+    # Signal Sprint is a standalone Win32 game; its pinned EXE has no Xbox
+    # services imports or identifiable Xbox Live initialization strings.
+    # Microsoft Game Publishing Guide explicitly requires GDK titles that do
+    # NOT use Xbox services to OMIT MSAAppId and TitleId from the retail
+    # MicrosoftGame.config, otherwise players can get Xbox sign-in errors.
+    # Keep the user-provided values in the independently verified Identity
+    # contract; do not silently turn on Xbox services just because IDs exist.
+    ET.SubElement(ET.SubElement(game, "Resources"), "Resource", {"Language": "en-US"})
+    ET.SubElement(ET.SubElement(game, "ExecutableList"), "Executable",
+                  {"Name": "SignalSprint.exe", "Id": "Game", "TargetDeviceFamily": "PC", "Architecture": "x64"})
+    ET.SubElement(game, "ShellVisuals", {"DefaultDisplayName": display,
+        "PublisherDisplayName": identity["publisher_display_name"],
+        "StoreLogo": ASSETS["StoreLogo"][0],
+        "Square150x150Logo": ASSETS["Square150x150Logo"][0],
+        "Square44x44Logo": ASSETS["Square44x44Logo"][0],
+        "SplashScreenImage": ASSETS["SplashScreenImage"][0],
+        "Description": display, "BackgroundColor": "#000040"})
+    ET.SubElement(ET.SubElement(game, "DesktopRegistration"), "ProcessorArchitecture").text = "x64"
+    xml_bytes = b'<?xml version="1.0" encoding="utf-8"?>\n' + ET.tostring(game, encoding="utf-8") + b"\n"
+    parsed = ET.fromstring(xml_bytes)
+    if (parsed.tag != "Game" or parsed.attrib != {"configVersion": "1"}
+            or parsed.find("Identity").attrib["Version"] != version
+            or parsed.find("ExecutableList/Executable").attrib["Name"] != "SignalSprint.exe"
+            or parsed.findtext("StoreId") != identity["store_id"]
+            or parsed.find("TitleId") is not None
+            or parsed.find("MSAAppId") is not None):
+        raise ConflictError("GDK generated config round-trip mismatch")
+    return xml_bytes
+
+
 def _validate_intake(intake: dict) -> None:
     if not isinstance(intake, dict) or intake.get("status") != "GDK_BUILD_INPUT_CHECK_ONLY":
         raise ConflictError("GDK post-CAS intake must be verified first")
@@ -204,7 +246,7 @@ def _validate_intake(intake: dict) -> None:
             raise ConflictError("GDK intake immutable field mismatch: " + key)
     if intake.get("identity") != PINNED_SIGNAL_SPRINT_GDK_IDENTITY:
         raise ConflictError("GDK intake Identity mismatch")
-    if intake.get("pinned_exe", {}).get("executable_sha256") != EXE_SHA256:
+    if type(intake.get("pinned_exe")) is not dict or intake["pinned_exe"].get("executable_sha256") != EXE_SHA256:
         raise ConflictError("GDK intake pinned executable mismatch")
     if intake.get("package_version") is not None or intake.get("real_msixvc_built") is not False or intake.get("store_submitted") is not False:
         raise ConflictError("GDK intake incorrectly claims downstream progress")
@@ -248,11 +290,21 @@ def verify_staging_inputs(asset_root: Path, contract: dict, *, require_config: b
             raise ConflictError("GDK staging bytes changed after preflight: " + name)
         _reject_redirected_path(path, "GDK staged file")
     if require_config:
+        # A self-consistent JSON digest is not proof of an approved Store
+        # Identity. Rebuild the exact allowed XML from pinned fields and
+        # separately reviewed version/display name before checking bytes.
+        try:
+            expected_xml = _render_reviewed_config(
+                contract.get("package_version"), contract.get("reviewed_display_name"))
+        except HoldError as exc:
+            raise ConflictError("GDK reviewed config version/display invalid") from exc
         xml = contract.get("microsoft_game_config_xml")
         digest = contract.get("microsoft_game_config_sha256")
         if (type(xml) is not str or type(digest) is not str
                 or hashlib.sha256(xml.encode("utf-8")).hexdigest() != digest):
             raise ConflictError("GDK reviewed config contract digest mismatch")
+        if xml.encode("utf-8") != expected_xml:
+            raise ConflictError("GDK reviewed config differs from pinned Identity and reviewed fields")
         path = asset_root / "MicrosoftGame.config"
         _regular_file(path, 2_000_000)
         if _sha(path) != digest:
@@ -292,40 +344,11 @@ def prepare_config(intake: dict, asset_root: Path, package_version: str, reviewe
             raise ConflictError("GDK icon changed during PNG validation: " + name)
         staging_hashes[name] = digest_after
 
-    identity = PINNED_SIGNAL_SPRINT_GDK_IDENTITY
-    game = ET.Element("Game", {"configVersion": "1"})
-    ET.SubElement(game, "Identity", {"Name": identity["name"], "Publisher": identity["publisher"], "Version": version})
-    ET.SubElement(game, "StoreId").text = identity["store_id"]
-    # Signal Sprint is a standalone Win32 game; its pinned EXE has no Xbox
-    # services imports or identifiable Xbox Live initialization strings.
-    # Microsoft Game Publishing Guide explicitly requires GDK titles that do
-    # NOT use Xbox services to OMIT MSAAppId and TitleId from the retail
-    # MicrosoftGame.config, otherwise players can get Xbox sign-in errors.
-    # Keep the user-provided values in the independently verified Identity
-    # contract; do not silently turn on Xbox services just because IDs exist.
-    ET.SubElement(ET.SubElement(game, "Resources"), "Resource", {"Language": "en-US"})
-    ET.SubElement(ET.SubElement(game, "ExecutableList"), "Executable",
-                  {"Name": "SignalSprint.exe", "Id": "Game", "TargetDeviceFamily": "PC", "Architecture": "x64"})
-    ET.SubElement(game, "ShellVisuals", {"DefaultDisplayName": display,
-        "PublisherDisplayName": identity["publisher_display_name"],
-        "StoreLogo": ASSETS["StoreLogo"][0],
-        "Square150x150Logo": ASSETS["Square150x150Logo"][0],
-        "Square44x44Logo": ASSETS["Square44x44Logo"][0],
-        "SplashScreenImage": ASSETS["SplashScreenImage"][0],
-        "Description": display, "BackgroundColor": "#000040"})
-    ET.SubElement(ET.SubElement(game, "DesktopRegistration"), "ProcessorArchitecture").text = "x64"
-    xml_bytes = b'<?xml version="1.0" encoding="utf-8"?>\n' + ET.tostring(game, encoding="utf-8") + b"\n"
-    parsed = ET.fromstring(xml_bytes)
-    if (parsed.tag != "Game" or parsed.attrib != {"configVersion": "1"}
-            or parsed.find("Identity").attrib["Version"] != version
-            or parsed.find("ExecutableList/Executable").attrib["Name"] != exe.name
-            or parsed.findtext("StoreId") != identity["store_id"]
-            or parsed.find("TitleId") is not None
-            or parsed.find("MSAAppId") is not None):
-        raise ConflictError("GDK generated config round-trip mismatch")
+    xml_bytes = _render_reviewed_config(version, display)
     result = {"schema_version": 1, "status": "GDK_CONFIG_CHECK_ONLY",
         "partner_center_selection": "GDK_GAME", "packaging_family": "GDK",
         "package_format": "MSIXVC_OR_MSIXVC2", "package_version": version,
+        "reviewed_display_name": display,
         "request_id": PINNED_SIGNAL_SPRINT_JOB["request_id"],
         "source_sha": PINNED_SIGNAL_SPRINT_JOB["source_sha"],
         "cas_commit_sha": intake["cas_commit_sha"],

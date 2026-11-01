@@ -341,6 +341,48 @@ class MicrosoftGameConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ConflictError, "config bytes changed"):
             cfg.verify_staging_inputs(self.root, result, require_config=True)
 
+    def test_staging_recheck_rejects_rehashed_foreign_store_id(self):
+        # A matching XML SHA and matching staged file alone must not
+        # authorize a different Partner Center Store identity.
+        result = self.build()
+        xml = result["microsoft_game_config_xml"].replace(
+            PINNED_SIGNAL_SPRINT_GDK_IDENTITY["store_id"], "9N0000000000")
+        result["microsoft_game_config_xml"] = xml
+        result["microsoft_game_config_sha256"] = hashlib.sha256(xml.encode()).hexdigest()
+        (self.root / "MicrosoftGame.config").write_bytes(xml.encode())
+        with self.assertRaisesRegex(ConflictError, "pinned Identity"):
+            cfg.verify_staging_inputs(self.root, result, require_config=True)
+
+    def test_staging_recheck_rejects_rehashed_xbox_services_injection(self):
+        result = self.build()
+        xml = result["microsoft_game_config_xml"].replace(
+            "</Game>", "<TitleId>68721417</TitleId></Game>")
+        result["microsoft_game_config_xml"] = xml
+        result["microsoft_game_config_sha256"] = hashlib.sha256(xml.encode()).hexdigest()
+        (self.root / "MicrosoftGame.config").write_bytes(xml.encode())
+        with self.assertRaisesRegex(ConflictError, "pinned Identity"):
+            cfg.verify_staging_inputs(self.root, result, require_config=True)
+
+    def test_staging_recheck_rejects_version_and_display_drift(self):
+        result = self.build()
+        (self.root / "MicrosoftGame.config").write_bytes(
+            result["microsoft_game_config_xml"].encode())
+        for key, changed in (("package_version", "2.0.0.0"),
+                             ("reviewed_display_name", "Different reviewed title")):
+            altered = copy.deepcopy(result)
+            altered[key] = changed
+            with self.subTest(field=key), self.assertRaisesRegex(ConflictError, "pinned Identity"):
+                cfg.verify_staging_inputs(self.root, altered, require_config=True)
+        result["package_version"] = "not-a-version"
+        with self.assertRaisesRegex(ConflictError, "version/display invalid"):
+            cfg.verify_staging_inputs(self.root, result, require_config=True)
+
+    def test_malformed_pinned_exe_intake_fails_classified(self):
+        for value in (None, [], "not-a-dict"):
+            self.intake["pinned_exe"] = value
+            with self.subTest(value=value), self.assertRaisesRegex(ConflictError, "pinned executable"):
+                self.build()
+
     def test_png_mutation_during_validation_rejected(self):
         original = cfg._png_dimensions
         def mutating_png(path):
