@@ -130,6 +130,8 @@ def _inspect_archive(raw: bytes, proposal: dict) -> dict:
                 raise ReissueHold("NEW_EXE_DIGEST_MISMATCH")
             provenance = _json(archive.read("provenance.json"))
             request = _json(archive.read("provisioner-request.json"))
+    except ReissueHold:
+        raise
     except (OSError, ValueError, RuntimeError, EOFError, zipfile.BadZipFile,
             zipfile.LargeZipFile, ConflictError) as exc:
         raise ReissueHold("NEW_ARCHIVE_INVALID") from exc
