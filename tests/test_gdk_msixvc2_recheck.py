@@ -97,6 +97,16 @@ class GdkMsixvc2RecheckTests(unittest.TestCase):
         with self.assertRaises(ConflictError):
             self.run_check()
 
+    def test_exponent_overflow_receipt_rejected_as_conflict(self):
+        self.receipt.write_text('{"schema_version":1e999}', encoding="utf-8")
+        with self.assertRaisesRegex(ConflictError, "malformed or ambiguous"):
+            self.run_check()
+
+    def test_finite_float_receipt_rejected_as_conflict(self):
+        self.receipt.write_text('{"schema_version":1.0}', encoding="utf-8")
+        with self.assertRaisesRegex(ConflictError, "malformed or ambiguous"):
+            self.run_check()
+
     def test_symlink_receipt_rejected(self):
         link = self.root / "linked.json"
         link.symlink_to(self.receipt)
