@@ -302,6 +302,56 @@ class MicrosoftGameConfigTests(unittest.TestCase):
             cfg.prepare_config(self.intake, redirected_root, "1.0.1.0",
                                "Signal Sprint (reviewed fixture)")
 
+    def test_staging_manifest_pins_all_executable_and_artwork_bytes(self):
+        result = self.build()
+        self.assertEqual(set(result["staging_sha256"]), {
+            "SignalSprint.exe", "StoreLogo.png", "Logo.png",
+            "SmallLogo.png", "SplashScreen.png"})
+        for name, digest in result["staging_sha256"].items():
+            self.assertEqual(digest, hashlib.sha256((self.root / name).read_bytes()).hexdigest())
+        verified = cfg.verify_staging_inputs(self.root, result)
+        self.assertEqual(verified["status"], "GDK_STAGING_BYTES_VERIFIED")
+        self.assertFalse(verified["real_msixvc_built"])
+        self.assertFalse(verified["gdk_sdk_validated"])
+
+    def test_staged_artwork_swap_after_preflight_rejected(self):
+        result = self.build()
+        (self.root / "SmallLogo.png").write_bytes(png(44, 44) + b"changed")
+        with self.assertRaisesRegex(ConflictError, "staging bytes changed"):
+            cfg.verify_staging_inputs(self.root, result)
+
+    def test_tampered_digest_manifest_rejected(self):
+        result = self.build()
+        result["staging_sha256"]["SmallLogo.png"] = "0" * 64
+        with self.assertRaisesRegex(ConflictError, "staging bytes changed"):
+            cfg.verify_staging_inputs(self.root, result)
+        del result["staging_sha256"]["Logo.png"]
+        with self.assertRaisesRegex(ConflictError, "digest manifest"):
+            cfg.verify_staging_inputs(self.root, result)
+
+    def test_config_file_must_match_reviewed_contract_before_sdk(self):
+        result = self.build()
+        config = self.root / "MicrosoftGame.config"
+        with self.assertRaisesRegex(HoldError, "missing"):
+            cfg.verify_staging_inputs(self.root, result, require_config=True)
+        config.write_text(result["microsoft_game_config_xml"], encoding="utf-8")
+        self.assertEqual(cfg.verify_staging_inputs(self.root, result, require_config=True)["status"],
+                         "GDK_STAGING_BYTES_VERIFIED")
+        config.write_bytes(config.read_bytes() + b"changed")
+        with self.assertRaisesRegex(ConflictError, "config bytes changed"):
+            cfg.verify_staging_inputs(self.root, result, require_config=True)
+
+    def test_png_mutation_during_validation_rejected(self):
+        original = cfg._png_dimensions
+        def mutating_png(path):
+            dims = original(path)
+            if path.name == "SmallLogo.png":
+                path.write_bytes(path.read_bytes() + b"changed after validation")
+            return dims
+        with patch.object(cfg, "_png_dimensions", side_effect=mutating_png):
+            with self.assertRaisesRegex(ConflictError, "changed during PNG validation"):
+                self.build()
+
     def test_false_downstream_success_rejected(self):
         self.intake["real_msixvc_built"] = True
         with self.assertRaisesRegex(ConflictError, "downstream"): self.build()
