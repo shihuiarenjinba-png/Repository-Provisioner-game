@@ -131,6 +131,37 @@ class RecoveryReceiptTests(unittest.TestCase):
         self.coherent_pins(archive=altered)
         self.assertFalse(recovery.recovery_receipt([self.path], [])["original_bytes_verified"])
 
+
+    def test_independent_provenance_hashes_survive_repacked_zip_mismatch(self):
+        self.coherent_pins()
+        with zipfile.ZipFile(self.path, "a") as z:
+            z.comment = b"changed-original-archive"
+        result = recovery.recovery_receipt([self.path], [])
+        entry = result["evidence"]["candidates"][0]
+        self.assertFalse(entry["zip_matches_repository"])
+        self.assertTrue(entry["exe_matches_repository"])
+        self.assertTrue(entry["provenance_matches_source"])
+        self.assertTrue(entry["request_matches_source"])
+        self.assertTrue(entry["provenance_matches_exe_bytes"])
+        self.assertEqual(len(entry["provenance_sha256"]), 64)
+        self.assertEqual(len(entry["request_sha256"]), 64)
+        self.assertFalse(result["original_bytes_verified"])
+
+    def test_wrong_product_provenance_independently_flagged(self):
+        wrong = {**PINNED_SIGNAL_SPRINT_JOB, "slug": "other-game",
+                 "executable": "SignalSprint.exe",
+                 "executable_sha256": sha(self.exe),
+                 "artifact_kind": "EXE_QA_UNSIGNED"}
+        altered = fixture(self.exe, provenance=wrong)
+        self.path.write_bytes(altered)
+        self.coherent_pins(archive=altered)
+        result = recovery.recovery_receipt([self.path], [])
+        entry = result["evidence"]["candidates"][0]
+        self.assertFalse(entry["provenance_matches_source"])
+        self.assertTrue(entry["request_matches_source"])
+        self.assertTrue(entry["provenance_matches_exe_bytes"])
+        self.assertFalse(result["original_bytes_verified"])
+
     def test_symlink_hold(self):
         self.coherent_pins()
         link = self.root / "linked.zip"
