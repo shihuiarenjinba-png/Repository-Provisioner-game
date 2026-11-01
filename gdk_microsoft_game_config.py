@@ -394,14 +394,20 @@ def main(argv=None) -> int:
                                 args.reviewed_display_name)
         if args.write_staging_config:
             target = args.asset_root / "MicrosoftGame.config"
-            # Exclusive creation only; never overwrite an existing config.
+            # Restart-safe: reuse an existing config only if the complete
+            # pinned staging contract verifies. Never overwrite or repair it.
+            # Exclusive creation also protects against concurrent writers.
             _reject_redirected_path(target, "GDK config destination")
-            with target.open("xb") as output:
-                output.write(result["microsoft_game_config_xml"].encode("utf-8"))
-            # A successful exclusive create is not proof that the staged XML
-            # still matches the reviewed contract. Re-read its bytes and all
-            # pinned assets before reporting a written config to the caller.
-            # The SDK consumer repeats this check at its own trust boundary.
+            try:
+                with target.open("xb") as output:
+                    output.write(result["microsoft_game_config_xml"].encode("utf-8"))
+            except FileExistsError:
+                # A retry (or concurrent create) must still pass the exact
+                # reviewed XML, Identity and asset digest checks below.
+                _reject_redirected_path(target, "GDK config destination")
+            # Both newly created and pre-existing configs must be verified
+            # before reporting success. A partial/foreign config fails closed
+            # and is never replaced by this CLI.
             verify_staging_inputs(args.asset_root, result, require_config=True)
             result["config_path"] = str(target)
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))

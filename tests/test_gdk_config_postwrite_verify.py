@@ -60,6 +60,33 @@ class GdkConfigPostWriteTests(unittest.TestCase):
         self.assertFalse(result["real_msixvc_built"])
         self.assertIn("bytes changed", result["error"])
 
+    def test_identical_existing_config_is_restart_safe(self):
+        target = self.root / "MicrosoftGame.config"
+        def check(root, contract, *, require_config):
+            self.assertTrue(require_config)
+            self.assertEqual(target.read_bytes(), self.xml.encode("utf-8"))
+        first_code, first_result, first_check = self.invoke(write=True, verifier=check)
+        second_code, second_result, second_check = self.invoke(write=True, verifier=check)
+        self.assertEqual((first_code, second_code), (0, 0))
+        self.assertEqual(first_check.call_count, 1)
+        self.assertEqual(second_check.call_count, 1)
+        self.assertEqual(first_result["config_path"], second_result["config_path"])
+        self.assertEqual(target.read_bytes(), self.xml.encode("utf-8"))
+
+    def test_foreign_existing_config_is_never_overwritten(self):
+        target = self.root / "MicrosoftGame.config"
+        target.write_bytes(b"foreign config")
+        def reject(root, contract, *, require_config):
+            self.assertTrue(require_config)
+            self.assertEqual(target.read_bytes(), b"foreign config")
+            raise ConflictError("GDK staged MicrosoftGame.config bytes changed")
+        code, result, check = self.invoke(write=True, verifier=reject)
+        self.assertEqual(code, 2)
+        self.assertEqual(check.call_count, 1)
+        self.assertNotIn("config_path", result)
+        self.assertFalse(result["real_msixvc_built"])
+        self.assertEqual(target.read_bytes(), b"foreign config")
+
     def test_check_only_does_not_write_or_call_postwrite_verifier(self):
         code, result, check = self.invoke(write=False, verifier=AssertionError("unexpected"))
         self.assertEqual(code, 0)
