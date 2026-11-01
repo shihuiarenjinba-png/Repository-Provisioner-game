@@ -6,7 +6,7 @@
 
 The earlier `gdk_microsoft_game_config.py` validates the reviewed GDK Identity, pinned executable and artwork, but does not prohibit *additional* unreviewed files in the makepkg staging folder. `gdk_msixvc2_preflight.py` closes this gap before Windows packaging.
 
-It re-runs the real Git CAS parent/ancestry and approved-identity verification, re-verifies the immutable ZIP and EXE SHA, and independently generates the reviewed MicrosoftGame.config. The staging directory must contain **exactly**:
+It re-runs the real Git CAS parent/ancestry and approved-identity verification, **requires the clean named `codex/game-signal-sprint-gdk-build-*` branch via `verify_build_branch` (not an optional separate check)**, re-verifies the immutable ZIP and EXE SHA, and independently generates the reviewed MicrosoftGame.config. The receipt binds the exact build branch and approved Identity Git blob SHA, so the second-pass recheck also detects branch or Identity changes. The staging directory must contain **exactly**:
 
 - `SignalSprint.exe` — original EXE SHA-256 `9c31c3633de0d9e248cd1642f9003962f4f117bf6780cf4fab9f66d1d73485ad`
 - `MicrosoftGame.config` — byte-for-byte equal to the generated reviewed XML
@@ -41,7 +41,7 @@ Successful output status is `GDK_MSIXVC2_STAGING_CHECK_ONLY`, with `gdk_sdk_vali
 4. Verify the real MSIXVC2 bytes and package payload; perform install, launch and GUI QA.
 5. Only after real validation, pass the package SHA and machine-readable evidence to the Windows-all-auto owner. Do not edit the central E2E ledger or cross-product queue in the GAME lane.
 
-Original Artifact #12706862577 expires 2026-11-01 03:18:51 UTC; preserve the original ZIP bytes. Never substitute a different rebuild. Store submission requires separate approval.
+Original Artifact #12706862577 had an expiry of **2026-11-01 03:18:51 UTC** (now past). Before attempting CAS/build, locate an independently preserved ZIP and verify its exact SHA-256 `e48a0426595dc227988f12944921511a47d5c8feca8b063a161dd0dd61306412` and contained EXE SHA-256 `9c31c3633de0d9e248cd1642f9003962f4f117bf6780cf4fab9f66d1d73485ad`. If no byte-identical preserved ZIP exists, keep the GDK build on HOLD and escalate; **never substitute a different rebuild**. Store submission requires separate approval.
 
 Current state: GDK Identity received; staging contract is CI-testable; actual CAS, Windows SDK validation, real MSIXVC2 and E2E remain unproven.
 
