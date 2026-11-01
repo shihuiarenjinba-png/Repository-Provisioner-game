@@ -62,10 +62,27 @@ def verify_staging(root: Path, expected_xml: str) -> dict[str, str]:
         raise HoldError("GDK MSIXVC2 staging cannot be read safely") from exc
 
 
+def _require_external_inputs(factory_checkout: Path, artifact_zip: Path, staging_dir: Path) -> None:
+    """Keep mutable packaging inputs outside the immutable Factory checkout.
+
+    Resolve symlinked ancestors as well as the final path; a clean Git status
+    can omit ignored staging files, so Git cleanliness alone is insufficient.
+    """
+    try:
+        checkout = factory_checkout.resolve(strict=True)
+        for label, candidate in (("artifact ZIP", artifact_zip), ("staging directory", staging_dir)):
+            resolved = candidate.resolve(strict=False)
+            if resolved == checkout or checkout in resolved.parents:
+                raise ConflictError(f"GDK {label} must be outside Factory checkout")
+    except (OSError, RuntimeError) as exc:
+        raise ConflictError("GDK packaging input path cannot be resolved safely") from exc
+
+
 def create_preflight(
     factory_checkout: Path, artifact_zip: Path, cas_sha: str, build_sha: str,
     staging_dir: Path, package_version: str, reviewed_display_name: str,
 ) -> dict:
+    _require_external_inputs(factory_checkout, artifact_zip, staging_dir)
     # A valid CAS receipt alone cannot authorize packaging from an arbitrary
     # checkout. Enforce the dedicated clean post-CAS build branch here, not
     # merely in a separate optional CLI step. Recheck repeats this gate.
