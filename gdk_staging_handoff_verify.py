@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 import sys
 
-from gdk_build_intake import _json
+from gdk_sdk_result_intake import _read_json
 from gdk_microsoft_game_config import _regular_file, verify_staging_inputs
 from package_identity_provisioner import ConflictError, HoldError
 
@@ -28,14 +28,26 @@ def _require_external_contract(contract_path: Path, asset_root: Path) -> None:
         raise ConflictError("GDK reviewed contract must be outside mutable staging root")
 
 
+def _load_external_contract(contract_path: Path, asset_root: Path) -> dict:
+    """Read one independently reviewed JSON with bounded, stable-file checks.
+
+    The SDK result intake's strict reader pins inode, size and modification
+    time across a bounded read, rejecting concurrent rewrites and duplicate
+    JSON keys. Repeat the staging location check after reading as well.
+    """
+    _require_external_contract(contract_path, asset_root)
+    contract = _read_json(contract_path, "GDK reviewed contract")
+    _require_external_contract(contract_path, asset_root)
+    return contract
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--contract-json", type=Path, required=True)
     parser.add_argument("--asset-root", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
-        _require_external_contract(args.contract_json, args.asset_root)
-        contract = _json(args.contract_json.read_bytes())
+        contract = _load_external_contract(args.contract_json, args.asset_root)
         result = verify_staging_inputs(args.asset_root, contract, require_config=True)
     except (ConflictError, HoldError, OSError, UnicodeError, ValueError) as exc:
         print(json.dumps({"status": getattr(exc, "status", "CONFLICT"),
