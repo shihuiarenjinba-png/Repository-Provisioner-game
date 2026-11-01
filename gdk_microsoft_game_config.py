@@ -316,24 +316,26 @@ def verify_staging_inputs(asset_root: Path, contract: dict, *, require_config: b
         if _sha(path) != hashes[name]:
             raise ConflictError("GDK staging bytes changed after preflight: " + name)
         _reject_redirected_path(path, "GDK staged file")
+    # Validate reviewed XML semantics even when config has not yet been written.
+    # Otherwise check-only can approve a poisoned contract without a config file.
+    # A check-only retry must also reject a pre-existing foreign config;
+    # otherwise it could report READY while the SDK staging is poisoned.
+    # A self-consistent JSON digest is not proof of an approved Store
+    # Identity. Rebuild the exact allowed XML from pinned fields and
+    # separately reviewed version/display name before checking bytes.
+    try:
+        expected_xml = _render_reviewed_config(
+            contract.get("package_version"), contract.get("reviewed_display_name"))
+    except HoldError as exc:
+        raise ConflictError("GDK reviewed config version/display invalid") from exc
+    xml = contract.get("microsoft_game_config_xml")
+    digest = contract.get("microsoft_game_config_sha256")
+    if (type(xml) is not str or type(digest) is not str
+            or hashlib.sha256(xml.encode("utf-8")).hexdigest() != digest):
+        raise ConflictError("GDK reviewed config contract digest mismatch")
+    if xml.encode("utf-8") != expected_xml:
+        raise ConflictError("GDK reviewed config differs from pinned Identity and reviewed fields")
     if require_config or has_config:
-        # A check-only retry must also reject a pre-existing foreign config;
-        # otherwise it could report READY while the SDK staging is poisoned.
-        # A self-consistent JSON digest is not proof of an approved Store
-        # Identity. Rebuild the exact allowed XML from pinned fields and
-        # separately reviewed version/display name before checking bytes.
-        try:
-            expected_xml = _render_reviewed_config(
-                contract.get("package_version"), contract.get("reviewed_display_name"))
-        except HoldError as exc:
-            raise ConflictError("GDK reviewed config version/display invalid") from exc
-        xml = contract.get("microsoft_game_config_xml")
-        digest = contract.get("microsoft_game_config_sha256")
-        if (type(xml) is not str or type(digest) is not str
-                or hashlib.sha256(xml.encode("utf-8")).hexdigest() != digest):
-            raise ConflictError("GDK reviewed config contract digest mismatch")
-        if xml.encode("utf-8") != expected_xml:
-            raise ConflictError("GDK reviewed config differs from pinned Identity and reviewed fields")
         path = asset_root / "MicrosoftGame.config"
         _regular_file(path, 2_000_000)
         if _sha(path) != digest:

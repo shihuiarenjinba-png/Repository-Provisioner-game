@@ -341,6 +341,34 @@ class MicrosoftGameConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ConflictError, "config bytes changed"):
             cfg.verify_staging_inputs(self.root, result, require_config=True)
 
+    def test_check_only_rejects_rehashed_foreign_xml_without_staged_config(self):
+        result = self.build()
+        self.assertFalse((self.root / "MicrosoftGame.config").exists())
+        xml = result["microsoft_game_config_xml"].replace(
+            PINNED_SIGNAL_SPRINT_GDK_IDENTITY["store_id"], "9N0000000000")
+        result["microsoft_game_config_xml"] = xml
+        result["microsoft_game_config_sha256"] = hashlib.sha256(xml.encode()).hexdigest()
+        with self.assertRaisesRegex(ConflictError, "pinned Identity"):
+            cfg.verify_staging_inputs(self.root, result)
+
+    def test_check_only_rejects_reviewed_version_drift_without_staged_config(self):
+        result = self.build()
+        result["package_version"] = "1.0.2.0"
+        with self.assertRaisesRegex(ConflictError, "pinned Identity"):
+            cfg.verify_staging_inputs(self.root, result)
+
+    def test_check_only_rejects_reviewed_display_drift_without_staged_config(self):
+        result = self.build()
+        result["reviewed_display_name"] = "Unreviewed Name"
+        with self.assertRaisesRegex(ConflictError, "pinned Identity"):
+            cfg.verify_staging_inputs(self.root, result)
+
+    def test_check_only_rejects_missing_xml_digest_without_staged_config(self):
+        result = self.build()
+        del result["microsoft_game_config_sha256"]
+        with self.assertRaisesRegex(ConflictError, "contract digest"):
+            cfg.verify_staging_inputs(self.root, result)
+
     def test_staging_recheck_rejects_rehashed_foreign_store_id(self):
         # A matching XML SHA and matching staged file alone must not
         # authorize a different Partner Center Store identity.
