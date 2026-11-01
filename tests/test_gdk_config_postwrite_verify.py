@@ -16,7 +16,7 @@ class GdkConfigPostWriteTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
-        self.xml = '<?xml version="1.0" encoding="utf-8"?>\\n<Game />\\n'
+        self.xml = '<?xml version="1.0" encoding="utf-8"?>\n<Game />\n'
         self.args = [
             "--factory-checkout", str(self.root),
             "--pinned-artifact-zip", str(self.root / "pinned.zip"),
