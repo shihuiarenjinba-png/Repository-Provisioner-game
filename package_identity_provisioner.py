@@ -893,6 +893,23 @@ class GitHubReturnClient:
                 or source_ref.get("object", {}).get("sha") != job.source_sha):
             raise ConflictError("Immutable Signal Sprint source branch moved during CAS resume")
 
+    @staticmethod
+    def _parse_product_json(raw: bytes, *, strict: bool) -> Any:
+        """Reject ambiguous pinned GDK evidence before CAS or resume.
+
+        Legacy products retain their existing JSON interpretation until their
+        independent contracts are migrated.
+        """
+        try:
+            if strict:
+                return json.loads(
+                    raw.decode("utf-8"), object_pairs_hook=_unique_json_object,
+                    parse_constant=lambda _: (_ for _ in ()).throw(
+                        ValueError("nonfinite JSON value")))
+            return json.loads(raw)
+        except (ValueError, UnicodeError) as exc:
+            raise ConflictError("Factory product evidence is invalid JSON") from exc
+
     def _verify_product(self, base: str, job: Job, config: ProductConfig) -> None:
         # Signal Sprint is immutable at source_sha. Read the exact commit,
         # not a moving source branch, even if ref checks before/after CAS pass.
@@ -907,19 +924,15 @@ class GitHubReturnClient:
                 raise ConflictError("Pinned 3D product project.godot is invalid")
         else:
             item = self.api(base + f"contents/products/{job.slug}/manifest.json?ref=" + branch)
-            try:
-                manifest = json.loads(self._decode_content(item, 16_000))
-            except json.JSONDecodeError as exc:
-                raise ConflictError("Factory product manifest is invalid JSON") from exc
+            manifest = self._parse_product_json(
+                self._decode_content(item, 16_000), strict=is_pinned_gdk)
             expected_kind = "app" if config.product_type == "APP" else "game"
             if not isinstance(manifest, dict) or manifest.get("slug") != job.slug or manifest.get("kind") != expected_kind:
                 raise ConflictError("Factory product manifest slug/kind mismatch")
             if config.product_type == "GAME":
                 proposal_item = self.api(base + f"contents/proposals/{job.slug}.json?ref=" + branch)
-                try:
-                    proposal = json.loads(self._decode_content(proposal_item, 16_000))
-                except json.JSONDecodeError as exc:
-                    raise ConflictError("Factory GAME proposal is invalid JSON") from exc
+                proposal = self._parse_product_json(
+                    self._decode_content(proposal_item, 16_000), strict=is_pinned_gdk)
                 if (not isinstance(proposal, dict) or proposal.get("slug") != job.slug
                         or proposal.get("title") != job.display_name):
                     raise ConflictError("Factory GAME product slug/display_name mismatch")

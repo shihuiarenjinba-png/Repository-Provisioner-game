@@ -75,7 +75,8 @@ class GdkCasResumeProvenanceTests(unittest.TestCase):
 
     def resume(self, *, parent=SOURCE, extra_file=False,
                changed_ref=False, missing_commit=False, current_head=CAS,
-               source_moved=False, wrapped=False, invalid_base64=False):
+               source_moved=False, wrapped=False, invalid_base64=False,
+               manifest_bytes=None, proposal_bytes=None):
         calls = []
         refs = 0
 
@@ -90,8 +91,12 @@ class GdkCasResumeProvenanceTests(unittest.TestCase):
                 refs += 1
                 return {"object": {"sha": OTHER if changed_ref and refs > 1 else current_head}}
             if "/manifest.json" in endpoint:
+                if manifest_bytes is not None:
+                    return {"encoding": "base64", "content": base64.b64encode(manifest_bytes).decode("ascii")}
                 return encoded({"slug": "signal-sprint", "kind": "game"}, wrapped=wrapped)
             if "/proposals/" in endpoint:
+                if proposal_bytes is not None:
+                    return {"encoding": "base64", "content": base64.b64encode(proposal_bytes).decode("ascii")}
                 return encoded({"slug": "signal-sprint", "title": "Signal Sprint - Offline Route Puzzle"}, wrapped=wrapped)
             if "/approved-identity.json" in endpoint:
                 self.assertIn("?ref=" + current_head, endpoint,
@@ -135,6 +140,28 @@ class GdkCasResumeProvenanceTests(unittest.TestCase):
             with self.subTest(endpoint=endpoint):
                 self.assertTrue(endpoint.endswith("?ref=" + SOURCE))
                 self.assertNotIn("?ref=" + self.job.source_branch, endpoint)
+
+    def test_pinned_manifest_duplicate_keys_rejected_before_resume(self):
+        with self.assertRaisesRegex(ConflictError, "invalid JSON"):
+            self.resume(manifest_bytes=(
+                b'{"slug":"signal-sprint","kind":"game","slug":"signal-sprint"}'))
+
+    def test_pinned_proposal_duplicate_keys_rejected_before_resume(self):
+        with self.assertRaisesRegex(ConflictError, "invalid JSON"):
+            self.resume(proposal_bytes=(
+                b'{"slug":"signal-sprint","title":"Signal Sprint - Offline Route Puzzle",'
+                b'"title":"Signal Sprint - Offline Route Puzzle"}'))
+
+    def test_pinned_proposal_nonfinite_number_rejected_before_resume(self):
+        with self.assertRaisesRegex(ConflictError, "invalid JSON"):
+            self.resume(proposal_bytes=(
+                b'{"slug":"signal-sprint","title":"Signal Sprint - Offline Route Puzzle",'
+                b'"score":NaN}'))
+
+    def test_pinned_manifest_invalid_utf8_is_conflict_not_crash(self):
+        with self.assertRaisesRegex(ConflictError, "invalid JSON"):
+            self.resume(manifest_bytes=(
+                b'{"slug":"signal-sprint","kind":"game","x":"' + bytes([255]) + b'"}'))
 
     def test_real_github_wrapped_base64_is_idempotent(self):
         # Exercise manifest, proposal and existing approved Identity through
