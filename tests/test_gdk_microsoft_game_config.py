@@ -398,6 +398,42 @@ class MicrosoftGameConfigTests(unittest.TestCase):
         self.intake["real_msixvc_built"] = True
         with self.assertRaisesRegex(ConflictError, "downstream"): self.build()
 
+    def test_unreviewed_staging_file_rejected_at_config_preflight(self):
+        result = self.build()
+        (self.root / "unexpected.dll").write_bytes(b"unreviewed payload")
+        with self.assertRaisesRegex(ConflictError, "staging inventory"):
+            cfg.verify_staging_inputs(self.root, result)
+        with self.assertRaisesRegex(ConflictError, "staging inventory"):
+            self.build()
+
+    def test_preexisting_valid_config_is_checked_in_check_only_mode(self):
+        result = self.build()
+        target = self.root / "MicrosoftGame.config"
+        target.write_bytes(result["microsoft_game_config_xml"].encode("utf-8"))
+        self.assertEqual(cfg.verify_staging_inputs(self.root, result)["status"],
+                         "GDK_STAGING_BYTES_VERIFIED")
+        self.assertEqual(self.build()["status"], "GDK_CONFIG_CHECK_ONLY")
+
+    def test_preexisting_foreign_config_fails_check_only(self):
+        result = self.build()
+        (self.root / "MicrosoftGame.config").write_bytes(b"foreign config")
+        with self.assertRaisesRegex(ConflictError, "config bytes changed"):
+            cfg.verify_staging_inputs(self.root, result)
+        with self.assertRaisesRegex(ConflictError, "config bytes changed"):
+            self.build()
+
+    def test_new_file_during_hashing_invalidates_inventory(self):
+        result = self.build()
+        original = cfg._sha
+        def inject(path):
+            digest = original(path)
+            if path.name == "Logo.png":
+                (self.root / "late.dll").write_bytes(b"appeared during scan")
+            return digest
+        with patch.object(cfg, "_sha", side_effect=inject):
+            with self.assertRaisesRegex(ConflictError, "staging inventory"):
+                cfg.verify_staging_inputs(self.root, result)
+
     def test_check_only_never_writes_config(self):
         self.build()
         self.assertFalse((self.root / "MicrosoftGame.config").exists())

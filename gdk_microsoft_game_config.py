@@ -296,13 +296,29 @@ def verify_staging_inputs(asset_root: Path, contract: dict, *, require_config: b
     _reject_redirected_path(asset_root, "GDK staging root")
     if not asset_root.is_dir():
         raise HoldError("GDK staging root unavailable")
+
+    def require_exact_inventory() -> bool:
+        # The five reviewed payload files, plus an optional existing config,
+        # are the only permitted entries. Reject unreviewed DLLs, nested
+        # directories and case-variant aliases before any SDK-facing success.
+        entries = list(asset_root.iterdir())
+        names = [entry.name for entry in entries]
+        has_config = "MicrosoftGame.config" in names
+        allowed = expected_names | ({"MicrosoftGame.config"} if has_config else set())
+        if len(entries) != len(allowed) or set(names) != allowed:
+            raise ConflictError("GDK staging inventory contains unreviewed or missing files")
+        return has_config
+
+    has_config = require_exact_inventory()
     for name in sorted(expected_names):
         path = asset_root / name
         _regular_file(path, 40_000_000 if name == "SignalSprint.exe" else 20_000_000)
         if _sha(path) != hashes[name]:
             raise ConflictError("GDK staging bytes changed after preflight: " + name)
         _reject_redirected_path(path, "GDK staged file")
-    if require_config:
+    if require_config or has_config:
+        # A check-only retry must also reject a pre-existing foreign config;
+        # otherwise it could report READY while the SDK staging is poisoned.
         # A self-consistent JSON digest is not proof of an approved Store
         # Identity. Rebuild the exact allowed XML from pinned fields and
         # separately reviewed version/display name before checking bytes.
@@ -323,6 +339,8 @@ def verify_staging_inputs(asset_root: Path, contract: dict, *, require_config: b
         if _sha(path) != digest:
             raise ConflictError("GDK staged MicrosoftGame.config bytes changed")
         _reject_redirected_path(path, "GDK staged config")
+    if require_exact_inventory() != has_config:
+        raise ConflictError("GDK staging inventory changed during verification")
     return {"status": "GDK_STAGING_BYTES_VERIFIED", "request_id": contract["request_id"],
             "source_sha": contract["source_sha"],
             "cas_commit_sha": contract["cas_commit_sha"],
