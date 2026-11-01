@@ -14,7 +14,7 @@ import stat
 import sys
 import zipfile
 
-from gdk_build_intake import ARTIFACT_SHA256, EXE_SHA256, inspect_pinned_artifact
+from gdk_build_intake import ARTIFACT_SHA256, EXE_SHA256, inspect_pinned_artifact, _json
 from package_identity_provisioner import PINNED_SIGNAL_SPRINT_JOB, ConflictError, HoldError
 
 MAX_ZIP_BYTES = 100_000_000
@@ -33,7 +33,10 @@ def inspect_candidate(path: Path) -> dict:
     """Hash ZIP and contained EXE separately, then validate full provenance."""
     result = {"path": str(path), "zip_sha256": None, "exe_sha256": None,
               "zip_match": False, "exe_match": False, "provenance_match": False,
-              "status": "ARTIFACT_EXACT_BYTES_HOLD"}
+              "status": "ARTIFACT_EXACT_BYTES_HOLD",
+              "provenance_sha256": None, "request_sha256": None,
+              "provenance_exe_sha256": None, "provenance_matches_exe_bytes": False,
+              "provenance_matches_source": False, "request_matches_source": False}
     try:
         # Reject symlinks in the entire path (including ancestor directories).
         absolute = Path(os.path.abspath(path))
@@ -61,6 +64,31 @@ def inspect_candidate(path: Path) -> dict:
                 return result
             with archive.open(info) as exe:
                 result["exe_sha256"] = sha256_stream(exe)
+            # Independently inspect the two small provenance records even if
+            # the ZIP or EXE hash differs. Never treat these as authenticated.
+            records = {}
+            for member, label in (("provenance.json", "provenance"),
+                                  ("provisioner-request.json", "request")):
+                meta = archive.getinfo(member)
+                if meta.is_dir() or not 0 < meta.file_size <= 65_536:
+                    result["reason"] = "PROVENANCE_SIZE_INVALID"
+                    return result
+                with archive.open(meta) as source:
+                    raw = source.read(65_537)
+                if len(raw) != meta.file_size:
+                    result["reason"] = "PROVENANCE_SIZE_INVALID"
+                    return result
+                result[label + "_sha256"] = hashlib.sha256(raw).hexdigest()
+                records[label] = _json(raw)
+            provenance, request = records["provenance"], records["request"]
+            result["provenance_exe_sha256"] = provenance.get("executable_sha256")
+            result["provenance_matches_exe_bytes"] = (
+                provenance.get("executable_sha256") == result["exe_sha256"])
+            result["provenance_matches_source"] = all(
+                provenance.get(k) == v for k, v in PINNED_SIGNAL_SPRINT_JOB.items())
+            result["request_matches_source"] = (
+                all(request.get(k) == v for k, v in PINNED_SIGNAL_SPRINT_JOB.items())
+                and request.get("dry_run") is True)
         result["exe_match"] = result["exe_sha256"] == EXE_SHA256
         if not result["zip_match"] or not result["exe_match"]:
             result["reason"] = "ZIP_OR_EXE_DIGEST_MISMATCH"
