@@ -17,7 +17,7 @@ From the Provisioner checkout, after the approved CAS and build SHA are availabl
 python gdk_microsoft_game_config.py --factory-checkout "<factory checkout>" --pinned-artifact-zip "<pinned zip>" --cas-commit-sha "<actual CAS SHA>" --build-head-sha "<actual build SHA>" --asset-root "<staging folder>" --package-version "<reviewed A.B.C.0>" --reviewed-display-name "<reviewed name>" --write-staging-config > "<reviewed-contract.json>"
 ```
 
-Keep `reviewed-contract.json` **outside** the mutable staging folder. Do not reuse an old JSON contract with newly rebuilt assets. The JSON contains SHA-256 values for the executable, four PNG files, and generated XML; it explicitly states `gdk_sdk_validated=false` and `real_msixvc_built=false`.
+Keep `reviewed-contract.json` **outside** the mutable staging folder. Do not reuse an old JSON contract with newly rebuilt assets. The JSON contains SHA-256 values for the executable, four PNG files, and generated XML; it explicitly states `gdk_sdk_validated=false` and `real_msixvc_built=false`. It also records the independently reviewed display name and explicit package version; the handoff verifier deterministically regenerates the permitted XML from those values and the pinned Store Identity. A self-consistent, recomputed JSON/XML SHA-256 is **not** sufficient to change Store ID, executable, Xbox-service tags, version or display name.
 
 Immediately before any future GDK SDK invocation:
 
