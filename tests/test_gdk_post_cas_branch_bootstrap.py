@@ -73,6 +73,41 @@ class PostCasBranchBootstrapTests(unittest.TestCase):
         self.assertEqual(self.git("rev-parse", self.job["source_branch"]), self.source)
         self.assertEqual(self.git("rev-parse", "HEAD"), self.cas)
 
+    def test_successful_update_ref_without_visible_ref_is_not_success(self):
+        # Model a concurrent ref deletion or delayed ref visibility after a
+        # successful atomic update-ref. The return code alone is insufficient.
+        real_ref = bootstrap._ref
+
+        def missing_build_ref(repo, name):
+            if name == self.build_ref:
+                return None
+            return real_ref(repo, name)
+
+        with patch.object(bootstrap, "_ref", side_effect=missing_build_ref):
+            with self.assertRaisesRegex(ConflictError, "creation not confirmed"):
+                bootstrap.bootstrap_build_branch(self.repo, self.cas, create=True)
+        # Git itself did create the ref; the verifier intentionally refused
+        # to claim success without observing the postcondition.
+        self.assertEqual(self.git("rev-parse", self.build_ref), self.cas)
+
+    def test_existing_build_ref_disappears_before_final_confirmation(self):
+        self.git("branch", self.build_branch, self.cas)
+        real_ref = bootstrap._ref
+        observations = 0
+
+        def disappearing_build_ref(repo, name):
+            nonlocal observations
+            if name == self.build_ref:
+                observations += 1
+                if observations >= 2:
+                    return None
+            return real_ref(repo, name)
+
+        with patch.object(bootstrap, "_ref", side_effect=disappearing_build_ref):
+            with self.assertRaisesRegex(ConflictError, "creation not confirmed"):
+                bootstrap.bootstrap_build_branch(self.repo, self.cas, create=True)
+        self.assertGreaterEqual(observations, 2)
+
     def test_existing_build_branch_at_other_sha_rejected_without_force(self):
         self.git("branch", self.build_branch, self.source)
         with self.assertRaisesRegex(ConflictError, "another commit"):
