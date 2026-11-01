@@ -14,8 +14,9 @@ class GdkMsixvc2PreflightTests(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name)
-        self.checkout = self.root / "factory"
-        self.checkout.mkdir()
+        checkout_tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(checkout_tmp.cleanup)
+        self.checkout = Path(checkout_tmp.name)
         self.exe = b"MZ" + b"synthetic-pinned-exe" * 10
         self.xml = '<?xml version="1.0"?><Game configVersion="1" />\n'
         for name in gate.MAX_FILE_BYTES:
