@@ -101,7 +101,7 @@ class GdkIdentityContractTests(unittest.TestCase):
                 source_reads.append(endpoint)
                 return {"object": {"sha": SOURCE_SHA}}
             if endpoint.endswith("git/ref/heads/" + cas_branch):
-                return {"object": {"sha": SOURCE_SHA}} if branch_creates else None
+                return {"object": {"sha": ("b" * 40 if writes else SOURCE_SHA)}} if branch_creates else None
             if endpoint.endswith("git/refs"):
                 branch_creates.append(body)
                 return {"ref": "refs/heads/" + cas_branch, "object": {"sha": SOURCE_SHA}}
@@ -114,7 +114,14 @@ class GdkIdentityContractTests(unittest.TestCase):
                 return {"encoding": "base64",
                         "content": base64.b64encode(json.dumps(value).encode()).decode()}
             if "/approved-identity.json" in endpoint:
-                return None
+                if not writes:
+                    return None
+                payload = writes[0]["variables"]["input"]["fileChanges"]["additions"][0]["contents"]
+                return {"encoding": "base64", "content": payload}
+            if "/commits/" in endpoint:
+                return {"sha": "b" * 40, "parents": [{"sha": SOURCE_SHA}],
+                        "files": [{"filename": "products/signal-sprint/store/approved-identity.json",
+                                   "status": "added"}]}
             if endpoint == "graphql":
                 writes.append(body)
                 return {"data": {"createCommitOnBranch": {
@@ -125,7 +132,7 @@ class GdkIdentityContractTests(unittest.TestCase):
             job, config, official, package, apply=True)
         self.assertEqual(result["status"], "APPLIED")
         self.assertEqual(result["branch"], cas_branch)
-        self.assertEqual(len(source_reads), 2, "immutable source must be rechecked immediately before CAS")
+        self.assertGreaterEqual(len(source_reads), 3, "immutable source must be checked after CAS as well")
         self.assertEqual(branch_creates, [{"ref": "refs/heads/" + cas_branch, "sha": SOURCE_SHA}])
         self.assertEqual(writes[0]["variables"]["input"]["branch"]["branchName"], cas_branch)
         self.assertEqual(writes[0]["variables"]["input"]["expectedHeadOid"], SOURCE_SHA)

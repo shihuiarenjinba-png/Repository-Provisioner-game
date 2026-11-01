@@ -50,13 +50,16 @@ class GdkCasCreateReconcileTests(unittest.TestCase):
         refs = {self.job.source_branch: SOURCE}
         calls = []
         writes = []
+        approved_payload = None
 
         def api(endpoint, body=None, allow_missing=False):
+            nonlocal approved_payload
             calls.append(endpoint)
             if endpoint == "graphql":
                 writes.append("graphql")
                 self.assertEqual(refs[CAS_BRANCH], SOURCE)
-                refs[CAS_BRANCH] = CAS
+                approved_payload = body["variables"]["input"]["fileChanges"]["additions"][0]["contents"]
+                refs[CAS_BRANCH] = OTHER if mode == "postwrite_ref_moved" else CAS
                 return {"data": {"createCommitOnBranch": {"commit": {
                     "oid": CAS, "url": "https://github.com/example/commit/" + CAS}}}}
             if endpoint.endswith("git/refs") and body:
@@ -66,9 +69,12 @@ class GdkCasCreateReconcileTests(unittest.TestCase):
                 if mode == "lost_response":
                     refs[CAS_BRANCH] = SOURCE
                     raise RetryableError("GitHub API timed out")
-                if mode == "concurrent_same":
+                if mode == "concurrent_same" or mode.startswith("postwrite_"):
                     refs[CAS_BRANCH] = SOURCE
-                    raise ConflictError("HTTP 422")
+                    if mode == "concurrent_same":
+                        raise ConflictError("HTTP 422")
+                    return {"ref": "refs/heads/" + CAS_BRANCH,
+                            "object": {"sha": SOURCE}}
                 if mode == "concurrent_other":
                     refs[CAS_BRANCH] = OTHER
                     raise ConflictError("HTTP 422")
@@ -86,8 +92,16 @@ class GdkCasCreateReconcileTests(unittest.TestCase):
                 return encoded({"slug": "signal-sprint",
                                 "title": "Signal Sprint - Offline Route Puzzle"})
             if "/approved-identity.json" in endpoint:
-                self.assertTrue(allow_missing)
-                return None
+                if approved_payload is None:
+                    self.assertTrue(allow_missing)
+                    return None
+                if mode == "postwrite_identity_tampered":
+                    return encoded({"store_id": "TAMPERED"})
+                return {"encoding": "base64", "content": approved_payload}
+            if "/commits/" in endpoint:
+                return {"sha": CAS, "parents": [{"sha": SOURCE}],
+                        "files": [{"filename": "products/signal-sprint/store/approved-identity.json",
+                                   "status": "added"}]}
             raise AssertionError("unexpected endpoint: " + endpoint)
 
         try:
@@ -95,7 +109,10 @@ class GdkCasCreateReconcileTests(unittest.TestCase):
                 self.job, self.config, self.official, self.package, apply=True)
         except (ConflictError, RetryableError):
             self.assertEqual(refs[self.job.source_branch], SOURCE)
-            self.assertNotIn("graphql", writes)
+            if mode.startswith("postwrite_"):
+                self.assertIn("graphql", writes)
+            else:
+                self.assertNotIn("graphql", writes)
             raise
         self.assertEqual(refs[self.job.source_branch], SOURCE)
         return result, refs, writes, calls
@@ -121,6 +138,14 @@ class GdkCasCreateReconcileTests(unittest.TestCase):
     def test_failed_create_with_missing_ref_does_not_claim_success(self):
         with self.assertRaisesRegex(ConflictError, "422"):
             self.attempt("still_missing")
+
+    def test_graphql_success_but_moved_cas_ref_never_claims_applied(self):
+        with self.assertRaisesRegex(ConflictError, "moved during CAS resume"):
+            self.attempt("postwrite_ref_moved")
+
+    def test_graphql_success_but_tampered_committed_bytes_never_claims_applied(self):
+        with self.assertRaisesRegex(ConflictError, "committed Identity differs"):
+            self.attempt("postwrite_identity_tampered")
 
 
 if __name__ == "__main__":

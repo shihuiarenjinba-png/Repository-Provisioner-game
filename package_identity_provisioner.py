@@ -840,6 +840,24 @@ class GitHubReturnClient:
         commit = output.get("data", {}).get("createCommitOnBranch", {}).get("commit")
         if not isinstance(commit, dict) or not SHA40.fullmatch(str(commit.get("oid", ""))):
             raise RetryableError("GitHub returned no confirmed commit SHA; reconcile before retry")
+        if gdk_return:
+            # A GraphQL success response alone does not prove that the
+            # reviewed Identity landed at the expected CAS ref. Re-read the
+            # actual commit, its single-file ancestry, the immutable source
+            # ref, and the committed bytes before claiming CAS_RETURN_PASS.
+            # On a lost/partial response, retry reconciles the same CAS
+            # rather than rebuilding or overwriting the original EXE.
+            cas_sha = commit["oid"]
+            self._verify_existing_gdk_cas(base, job, cas_sha, target_path, cas_branch)
+            committed = self.api(base + "contents/" + target_path + "?ref=" + cas_sha)
+            if not self._existing_matches(committed, official, job, package):
+                raise ConflictError("GDK CAS committed Identity differs from reviewed evidence")
+            # A final ref check closes the interval between commit and bytes
+            # verification; no branch mutation is performed on failure.
+            latest = self.api(base + "git/ref/heads/" + cas_branch)
+            if (not isinstance(latest, dict)
+                    or latest.get("object", {}).get("sha") != cas_sha):
+                raise ConflictError("GDK CAS branch moved after committed Identity verification")
         return {**proposal, "status": "APPLIED", "commit_sha": commit["oid"], "commit_url": commit.get("url")}
 
     def _verify_existing_gdk_cas(self, base: str, job: Job,
@@ -876,7 +894,13 @@ class GitHubReturnClient:
             raise ConflictError("Immutable Signal Sprint source branch moved during CAS resume")
 
     def _verify_product(self, base: str, job: Job, config: ProductConfig) -> None:
-        branch = quote(job.source_branch, safe="")
+        # Signal Sprint is immutable at source_sha. Read the exact commit,
+        # not a moving source branch, even if ref checks before/after CAS pass.
+        # Keep legacy routes unchanged until their ref contracts are migrated.
+        is_pinned_gdk = (config.product_type == "GAME" and all(
+            getattr(job, key) == value for key, value in PINNED_SIGNAL_SPRINT_JOB.items()))
+        evidence_ref = job.source_sha if is_pinned_gdk else job.source_branch
+        branch = quote(evidence_ref, safe="")
         if config.product_type == "GAME_3D":
             item = self.api(base + f"contents/products/{job.slug}/project.godot?ref=" + branch)
             if b"run/main_scene" not in self._decode_content(item, 128_000):
