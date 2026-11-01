@@ -94,8 +94,8 @@ def _proposal(raw: bytes) -> dict:
         raise ReissueHold("NEW_LINEAGE_ID_NOT_DISTINCT")
     for field, old in (("zip_sha256", ARTIFACT_SHA256), ("exe_sha256", EXE_SHA256)):
         value = data[field]
-        if not isinstance(value, str) or not HEX64.fullmatch(value) or value == old
-                or (field == "exe_sha256" and value == HANDOFF_EXE_SHA256):
+        if (not isinstance(value, str) or not HEX64.fullmatch(value) or value == old
+                or (field == "exe_sha256" and value == HANDOFF_EXE_SHA256)):
             raise ReissueHold("NEW_LINEAGE_DIGEST_MISSING_OR_REUSED")
     if (not isinstance(data["reviewed_by"], str)
             or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.@ -]{2,99}", data["reviewed_by"])
