@@ -16,13 +16,25 @@ from gdk_microsoft_game_config import _regular_file, verify_staging_inputs
 from package_identity_provisioner import ConflictError, HoldError
 
 
+def _require_external_contract(contract_path: Path, asset_root: Path) -> None:
+    """Do not treat a manifest inside mutable SDK staging as independent review.
+
+    Resolve lexical '..' and reject linked components before comparing paths.
+    This is a location boundary, not an authenticity signature: callers must
+    still protect and review the external contract independently.
+    """
+    _regular_file(contract_path, 2_000_000)
+    if contract_path.resolve().is_relative_to(asset_root.resolve()):
+        raise ConflictError("GDK reviewed contract must be outside mutable staging root")
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--contract-json", type=Path, required=True)
     parser.add_argument("--asset-root", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
-        _regular_file(args.contract_json, 2_000_000)
+        _require_external_contract(args.contract_json, args.asset_root)
         contract = _json(args.contract_json.read_bytes())
         result = verify_staging_inputs(args.asset_root, contract, require_config=True)
     except (ConflictError, HoldError, OSError, UnicodeError, ValueError) as exc:
