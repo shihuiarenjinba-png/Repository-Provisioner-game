@@ -225,6 +225,8 @@ def verify_staging_inputs(asset_root: Path, contract: dict, *, require_config: b
             or contract.get("request_id") != PINNED_SIGNAL_SPRINT_JOB["request_id"]
             or contract.get("source_sha") != PINNED_SIGNAL_SPRINT_JOB["source_sha"]
             or contract.get("pinned_exe_sha256") != EXE_SHA256
+            or any(type(contract.get(k)) is not str or not re.fullmatch(r"[0-9a-f]{40}", contract[k])
+                   for k in ("cas_commit_sha", "factory_head_sha"))
             or contract.get("gdk_sdk_validated") is not False
             or contract.get("real_msixvc_built") is not False
             or contract.get("store_submitted") is not False):
@@ -280,10 +282,14 @@ def prepare_config(intake: dict, asset_root: Path, package_version: str, reviewe
     staging_hashes = {"SignalSprint.exe": EXE_SHA256}
     for _, (name, dims) in ASSETS.items():
         icon = asset_root / name
+        digest_before = _sha(icon)
         if _png_dimensions(icon) != dims:
             raise ConflictError("GDK icon dimensions mismatch: " + name)
         _reject_redirected_path(icon, "GDK staged icon")
-        staging_hashes[name] = _sha(icon)
+        digest_after = _sha(icon)
+        if digest_after != digest_before:
+            raise ConflictError("GDK icon changed during PNG validation: " + name)
+        staging_hashes[name] = digest_after
 
     identity = PINNED_SIGNAL_SPRINT_GDK_IDENTITY
     game = ET.Element("Game", {"configVersion": "1"})
