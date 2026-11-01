@@ -22,7 +22,7 @@ from gdk_new_lineage_reissue_check import (
     MAX_PROPOSAL, MAX_ARCHIVE, ReissueHold, SOURCE, OLD_REQUEST,
     _safe_regular, check_reissue,
 )
-from package_identity_provisioner import PINNED_SIGNAL_SPRINT_GDK_IDENTITY, PINNED_SIGNAL_SPRINT_JOB
+from package_identity_provisioner import ConflictError, PINNED_SIGNAL_SPRINT_GDK_IDENTITY
 
 MAX_RECEIPT = 65_536
 SHA40 = re.compile(r"[0-9a-f]{40}\Z")
@@ -77,7 +77,7 @@ def _fresh_receipt(proposal: Path, archive: Path, saved: Path) -> dict:
     try:
         raw = _safe_regular(saved, MAX_RECEIPT)
         previous = _json(raw)
-    except (ReissueHold, ValueError, TypeError) as exc:
+    except (ReissueHold, ConflictError, ValueError, TypeError, RecursionError) as exc:
         raise CasPrecheckHold("REISSUE_RECEIPT_MISSING_OR_INVALID") from exc
     current = check_reissue(proposal, archive)
     if (current.get("status") != "NEW_LINEAGE_CHECK_ONLY"
