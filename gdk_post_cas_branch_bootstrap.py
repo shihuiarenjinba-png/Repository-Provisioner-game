@@ -107,6 +107,13 @@ def bootstrap_build_branch(repo: Path, cas_sha: str, *, create: bool = False) ->
     actual = _ref(repo, build_ref)
     if actual is not None and actual != cas_sha:
         raise ConflictError("GDK build branch changed during verification")
+    # A successful update-ref exit code is not proof that the ref still
+    # exists: another process may delete it before our final read. The
+    # remote bootstrap already requires this postcondition. Keep the local
+    # result equally fail-closed instead of claiming a created/verified ref
+    # with factory_head_sha=None.
+    if create and actual != cas_sha:
+        raise ConflictError("GDK local build branch creation not confirmed")
     return {
         "schema_version": 1,
         "status": ("GDK_BUILD_BRANCH_LOCAL_CREATED_OR_EXISTING" if create
@@ -118,7 +125,7 @@ def bootstrap_build_branch(repo: Path, cas_sha: str, *, create: bool = False) ->
         "factory_head_sha": actual if create else None,
         "build_branch": branch,
         "build_ref_exists_at_cas": actual == cas_sha,
-        "local_ref_created_or_verified": create,
+        "local_ref_created_or_verified": bool(create and actual == cas_sha),
         "remote_ref_pushed": False,
         "real_msixvc_built": False,
         "store_submitted": False,
