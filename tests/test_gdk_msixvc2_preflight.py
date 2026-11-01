@@ -14,6 +14,8 @@ class GdkMsixvc2PreflightTests(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name)
+        self.checkout = self.root / "factory"
+        self.checkout.mkdir()
         self.exe = b"MZ" + b"synthetic-pinned-exe" * 10
         self.xml = '<?xml version="1.0"?><Game configVersion="1" />\n'
         for name in gate.MAX_FILE_BYTES:
@@ -51,7 +53,7 @@ class GdkMsixvc2PreflightTests(unittest.TestCase):
 
     def run_gate(self):
         return gate.create_preflight(
-            self.root, self.root / "original.zip", "b" * 40, "c" * 40,
+            self.checkout, self.root / "original.zip", "b" * 40, "c" * 40,
             self.root, "1.0.1.0", "Signal Sprint")
 
     def test_exact_staging_is_check_only(self):
@@ -67,6 +69,26 @@ class GdkMsixvc2PreflightTests(unittest.TestCase):
         self.assertFalse(result["gdk_sdk_validated"])
         self.assertFalse(result["real_msixvc_built"])
         self.assertFalse(result["store_submitted"])
+
+    def test_staging_inside_factory_checkout_rejected(self):
+        with self.assertRaisesRegex(ConflictError, "staging directory must be outside"):
+            gate.create_preflight(
+                self.checkout, self.root / "original.zip", "b" * 40, "c" * 40,
+                self.checkout / "ignored-staging", "1.0.1.0", "Signal Sprint")
+
+    def test_artifact_inside_factory_checkout_rejected(self):
+        with self.assertRaisesRegex(ConflictError, "artifact ZIP must be outside"):
+            gate.create_preflight(
+                self.checkout, self.checkout / "ignored-artifact.zip", "b" * 40,
+                "c" * 40, self.root, "1.0.1.0", "Signal Sprint")
+
+    def test_symlinked_ancestor_into_factory_rejected(self):
+        alias = self.root / "alias"
+        alias.symlink_to(self.checkout, target_is_directory=True)
+        with self.assertRaisesRegex(ConflictError, "staging directory must be outside"):
+            gate.create_preflight(
+                self.checkout, self.root / "original.zip", "b" * 40, "c" * 40,
+                alias / "ignored-staging", "1.0.1.0", "Signal Sprint")
 
     def test_missing_dedicated_branch_gate_rejected(self):
         self.branch_receipt["status"] = "UNVERIFIED"
