@@ -11,7 +11,7 @@ SOURCE = "c058cbf7fe38e02d929c67d047d717ff74bd522e"
 REQUEST = ("game-signal-sprint-" + SOURCE +
            "-reissue-sprint-41361263698-41361263698")
 EXE_SHA = "beb683b61b4fa4b2ec90fe1d413363c8a535bd4cb72b41b54b03a9685f516ee0"
-TRUE_CHECKS = ("process_launched", "window_observed", "first_move_ui_observed",
+TRUE_CHECKS = ("process_launched", "window_observed", "input_attempted", "first_move_ui_observed",
                "loss_ui_observed", "retry_ui_observed")
 FALSE_AUTHORITIES = ("human_qa_pass", "consumer_sale_ready", "cas_return_pass",
                      "gdk_sdk_executed", "real_msixvc_built", "store_submitted")
