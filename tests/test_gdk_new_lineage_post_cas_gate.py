@@ -155,6 +155,16 @@ class PostCasGateTests(unittest.TestCase):
         self.save()
         self.assert_hold("version")
 
+    def test_invalid_review_timestamp_rejected(self):
+        self.version_data["reviewed_at"] = "tomorrow"
+        self.save()
+        self.assert_hold("REVIEW_TIMESTAMP_INVALID")
+
+    def test_placeholder_reviewer_rejected(self):
+        self.asset_data["reviewed_by"] = "tester"
+        self.save()
+        self.assert_hold("REVIEWER_INVALID")
+
     def test_wrong_build_head_rejected(self):
         evidence = live()
         evidence["build_head_sha"] = "f" * 40
