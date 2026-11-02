@@ -10,6 +10,7 @@ import hashlib
 import json
 import re
 import struct
+import zlib
 from pathlib import Path
 
 SOURCE = "c058cbf7fe38e02d929c67d047d717ff74bd522e"
@@ -78,6 +79,10 @@ def check(receipt: dict, screenshot: Path | None = None) -> dict:
             if (len(data) < 24 or data[:8] != b"\x89PNG\r\n\x1a\n"
                     or data[12:16] != b"IHDR"):
                 result["reason"] = "SCREENSHOT_NOT_PNG"
+                return result
+            if (len(data) < 33 or data[8:12] != b"\x00\x00\x00\x0d"
+                    or zlib.crc32(data[12:29]) != struct.unpack(">I", data[29:33])[0]):
+                result["reason"] = "SCREENSHOT_PNG_IHDR_INVALID"
                 return result
             width, height = struct.unpack(">II", data[16:24])
             if [width, height] != dimensions:
