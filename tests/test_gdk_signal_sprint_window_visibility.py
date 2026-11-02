@@ -137,6 +137,19 @@ class VisibilityTests(unittest.TestCase):
             self.assertIn(field, script)
         self.assertNotIn("consumer_sale_ready = $true", script)
 
+    def test_actual_live_runner_receipt_is_not_promoted(self):
+        import json
+        path = (Path(__file__).resolve().parents[1] / "docs" /
+                "SIGNAL_SPRINT_WINDOW_VISIBILITY_REAL_RUN_41412293078.json")
+        receipt = json.loads(path.read_text(encoding="utf-8"))
+        r = gate.check(receipt)
+        self.assertEqual(r["reason"], "WINDOW_OUTSIDE_MONITOR_AND_WORKAREA")
+        self.assertEqual(r["outside_workarea_area_px2"], receipt["outside_workarea_area_px2"])
+        self.assertTrue(r["screenshot_cropped"])
+        self.assertEqual(receipt["dpi_percent"], 100)
+        self.assertFalse(receipt["dpi_125_150_verified"])
+        self.assertFalse(r["ready_for_sale"])
+
     def test_historical_screenshot_receipt_is_not_promoted(self):
         import json
         path = (Path(__file__).resolve().parents[1] / "docs" /
