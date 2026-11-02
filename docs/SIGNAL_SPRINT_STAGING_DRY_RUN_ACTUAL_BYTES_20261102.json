@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "LOCAL_REAL_ARTIFACT_TRANSIENT_EXE_STAGE_RECHECK_WITH_STUBBED_RECONCILE_NOT_NEW_LIVE_GITHUB_AUTH",
+  "status": "NEW_LINEAGE_STAGING_DRY_RUN_HOLD",
+  "partner_center_selection": "GDK game",
+  "registration": "GDK_GAME",
+  "package_format": "MSIXVC2",
+  "source_sha": "c058cbf7fe38e02d929c67d047d717ff74bd522e",
+  "build_head_sha": "a1af3448cd2edeae5bd54cbaca486a53fd991944",
+  "new_request_id": "game-signal-sprint-c058cbf7fe38e02d929c67d047d717ff74bd522e-reissue-sprint-41361263698-41361263698",
+  "original_request_id": "game-signal-sprint-c058cbf7fe38e02d929c67d047d717ff74bd522e",
+  "original_lineage_status": "ARTIFACT_EXACT_BYTES_HOLD",
+  "github_run_id": 41361263698,
+  "github_artifact_id": 13105352227,
+  "outer_zip_sha256": "843496682662e871fc6e1b5df83ace2c6b01ef314cfc466b5072290890b70a8f",
+  "inner_zip_sha256": "46aff1ee7570459235c9e7ca7fb1faf6f494dc8100e62b6e132c6d07a6291b71",
+  "exe_sha256": "beb683b61b4fa4b2ec90fe1d413363c8a535bd4cb72b41b54b03a9685f516ee0",
+  "verified_transient_files": [
+    {
+      "destination": "SignalSprint.exe",
+      "size_bytes": 11344389,
+      "sha256": "beb683b61b4fa4b2ec90fe1d413363c8a535bd4cb72b41b54b03a9685f516ee0"
+    }
+  ],
+  "missing_files": [
+    "Logo.png",
+    "MicrosoftGame.config",
+    "SmallLogo.png",
+    "SplashScreen.png",
+    "StoreLogo.png"
+  ],
+  "missing_authorities": [
+    "authenticated new-request CAS authorization",
+    "independently approved package Version",
+    "independently approved four GDK image assets",
+    "authenticated independent reviewer"
+  ],
+  "local_synthetic_tests_pass": 9,
+  "staging_persisted": false,
+  "cas_return_pass": false,
+  "review_authenticity_verified": false,
+  "ready_for_sdk": false,
+  "gdk_sdk_validated": false,
+  "real_msixvc_built": false,
+  "e2e_pass": false,
+  "store_submitted": false,
+  "limitations": "Local recheck used a stub for reconcile() to exercise isolated real-byte stage; full repository reconcile() requires GitHub CI/integration run. Previous GitHub live check-only receipt remains separate. No approved assets or Version supplied. Not a package PASS."
+}
