@@ -19,7 +19,9 @@ from gdk_new_lineage_post_cas_gate import (
     OUTER_SHA, RUN_ID, SOURCE,
 )
 from gdk_microsoft_game_config import ASSETS
-from package_identity_provisioner import (\n    PINNED_SIGNAL_SPRINT_GDK_IDENTITY as ID, ConflictError, HoldError,\n)
+from package_identity_provisioner import (
+    PINNED_SIGNAL_SPRINT_GDK_IDENTITY as ID, ConflictError, HoldError,
+)
 
 EXPECTED_ASSETS = {name for name, _ in ASSETS.values()}
 EXPECTED_FILES = EXPECTED_ASSETS | {"SignalSprint.exe", "MicrosoftGame.config"}
