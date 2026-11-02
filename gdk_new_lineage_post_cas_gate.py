@@ -8,6 +8,7 @@ SDK execution, MSIXVC2 packaging, E2E, or Store submission.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import hashlib
 import json
 from pathlib import Path
@@ -77,10 +78,20 @@ def read_review(path: Path, keys: frozenset[str]) -> tuple[dict, str]:
             record.get("source_sha") == SOURCE and
             record.get("exe_sha256") == EXE_SHA, "REVIEW_LINEAGE_MISMATCH")
     # No self-declared 'authenticated' flag can establish review authority.
-    require(type(record.get("reviewed_by")) is str and
-            len(record["reviewed_by"].strip()) >= 3 and
-            type(record.get("reviewed_at")) is str and
-            len(record["reviewed_at"]) >= 20, "REVIEW_PROVENANCE_MISSING")
+    reviewer, reviewed_at = record.get("reviewed_by"), record.get("reviewed_at")
+    require(type(reviewer) is str and
+            re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.@ -]{2,99}", reviewer) is not None
+            and reviewer.strip() == reviewer and
+            reviewer.lower() not in {"test", "tester", "unknown", "placeholder", "tbd", "reviewer"},
+            "REVIEWER_INVALID")
+    require(type(reviewed_at) is str and re.fullmatch(
+            r"\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d(?:\\.\\d{1,6})?(?:Z|[+-]\\d\\d:\\d\\d)",
+            reviewed_at) is not None, "REVIEW_TIMESTAMP_INVALID")
+    try:
+        timestamp = datetime.fromisoformat(reviewed_at.replace("Z", "+00:00"))
+        require(timestamp.utcoffset() is not None, "REVIEW_TIMESTAMP_INVALID")
+    except ValueError as exc:
+        raise ConflictError("REVIEW_TIMESTAMP_INVALID") from exc
     return record, hashlib.sha256(raw).hexdigest()
 
 
@@ -105,6 +116,13 @@ def verify_cas_git(checkout: Path, cas_sha: str, build_sha: str) -> str:
                      "--", "products/signal-sprint"), "BUILD_MUTATED_PRODUCT_TREE")
     approved = _json(_git(checkout, "show", cas_sha + ":" + APPROVED_PATH))
     require(set(approved) == APPROVED_FIELDS, "CAS_IDENTITY_SCHEMA_MISMATCH")
+    require(approved.get("schema_version") == "1.0" and
+            type(approved.get("signature_status")) is str and
+            bool(approved["signature_status"].strip()) and
+            type(approved.get("provided_at")) is str and
+            re.fullmatch(r"\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d(?:\\.\\d{1,6})?(?:Z|[+-]\\d\\d:\\d\\d)",
+                         approved["provided_at"]) is not None,
+            "CAS_IDENTITY_PROVENANCE_INVALID")
     require(_json(_git(checkout, "show", build_sha + ":" + APPROVED_PATH)) == approved,
             "BUILD_CHANGED_APPROVED_IDENTITY")
     expected = {
