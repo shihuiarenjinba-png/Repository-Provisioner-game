@@ -9,6 +9,7 @@ import argparse
 import hashlib
 import json
 import re
+import struct
 from pathlib import Path
 
 SOURCE = "c058cbf7fe38e02d929c67d047d717ff74bd522e"
@@ -70,8 +71,17 @@ def check(receipt: dict, screenshot: Path | None = None) -> dict:
         return result
     if screenshot is not None:
         try:
-            if hashlib.sha256(screenshot.read_bytes()).hexdigest() != digest:
+            data = screenshot.read_bytes()
+            if hashlib.sha256(data).hexdigest() != digest:
                 result["reason"] = "SCREENSHOT_BYTES_MISMATCH"
+                return result
+            if (len(data) < 24 or data[:8] != b"\\x89PNG\\r\\n\\x1a\\n"
+                    or data[12:16] != b"IHDR"):
+                result["reason"] = "SCREENSHOT_NOT_PNG"
+                return result
+            width, height = struct.unpack(">II", data[16:24])
+            if [width, height] != dimensions:
+                result["reason"] = "SCREENSHOT_PNG_DIMENSIONS_MISMATCH"
                 return result
         except OSError:
             result["reason"] = "SCREENSHOT_UNAVAILABLE"
@@ -131,7 +141,7 @@ def check(receipt: dict, screenshot: Path | None = None) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--receipt", type=Path, required=True)
-    parser.add_argument("--screenshot", type=Path)
+    parser.add_argument("--screenshot", type=Path, required=True)
     args = parser.parse_args()
     try:
         receipt = json.loads(args.receipt.read_text(encoding="utf-8-sig"))
