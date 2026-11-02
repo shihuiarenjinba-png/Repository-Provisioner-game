@@ -30,7 +30,7 @@ function Require([bool]$ok, [string]$reason) {
   if (-not $ok) { throw $reason }
 }
 function Names($window) {
-  $condition = New-Object System.Windows.Automation.PropertyCondition(
+  $condition = [System.Windows.Automation.PropertyCondition]::new(
     [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
     [System.Windows.Automation.ControlType]::Text)
   $nodes = $window.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)
@@ -38,8 +38,8 @@ function Names($window) {
   for ($i = 0; $i -lt $nodes.Count; $i++) { $texts += [string]$nodes.Item($i).Current.Name }
   return ($texts -join [Environment]::NewLine)
 }
-function Send-RealKey([string]$key, [int]$pid) {
-  [Microsoft.VisualBasic.Interaction]::AppActivate($pid) | Out-Null
+function Send-RealKey([string]$key, [int]$targetProcessId) {
+  [Microsoft.VisualBasic.Interaction]::AppActivate($targetProcessId) | Out-Null
   Start-Sleep -Milliseconds 120
   [System.Windows.Forms.SendKeys]::SendWait($key)
   Start-Sleep -Milliseconds 120
@@ -104,12 +104,12 @@ try {
           $bounds.Left -ge $screen.Left -and $bounds.Top -ge $screen.Top -and
           ($bounds.Left + $width) -le $screen.Right -and
           ($bounds.Top + $height) -le $screen.Bottom) {
-        $bitmap = New-Object System.Drawing.Bitmap($width, $height)
+        $bitmap = [System.Drawing.Bitmap]::new($width, $height)
         try {
           $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
           try {
             $graphics.CopyFromScreen([int]$bounds.Left, [int]$bounds.Top, 0, 0,
-              (New-Object System.Drawing.Size($width, $height)))
+              ([System.Drawing.Size]::new($width, $height)))
           } finally { $graphics.Dispose() }
           $bitmap.Save($ScreenshotPath, [System.Drawing.Imaging.ImageFormat]::Png)
           $receipt.screenshot_captured = $true
