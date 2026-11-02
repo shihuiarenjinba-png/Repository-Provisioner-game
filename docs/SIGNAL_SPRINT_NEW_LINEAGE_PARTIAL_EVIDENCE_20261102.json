@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "status": "PARTIAL_GITHUB_CONNECTOR_EVIDENCE_CHECK_ONLY",
+  "product": "Signal Sprint",
+  "partner_center_selection": "GDK_GAME",
+  "evidence_date_utc": "2026-11-02",
+  "source_sha": "c058cbf7fe38e02d929c67d047d717ff74bd522e",
+  "build_head_sha": "a1af3448cd2edeae5bd54cbaca486a53fd991944",
+  "original_request_id": "game-signal-sprint-c058cbf7fe38e02d929c67d047d717ff74bd522e",
+  "new_request_id": "game-signal-sprint-c058cbf7fe38e02d929c67d047d717ff74bd522e-reissue-sprint-41361263698-41361263698",
+  "github_run_id": 41361263698,
+  "github_job_id": 125011930692,
+  "github_artifact_id": 13105352227,
+  "independent_connector_observations": {
+    "run": {
+      "source": "fetch_commit_workflow_runs",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    "job": {
+      "source": "fetch_workflow_run_jobs",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    "artifact": {
+      "source": "fetch_workflow_run_artifacts",
+      "expired": false,
+      "expires_at": "2026-12-01T23:17:04Z",
+      "size_in_bytes": 11095443,
+      "digest": "sha256:843496682662e871fc6e1b5df83ace2c6b01ef314cfc466b5072290890b70a8f"
+    }
+  },
+  "locally_rehashed_original_bytes": {
+    "outer_github_zip_sha256": "843496682662e871fc6e1b5df83ace2c6b01ef314cfc466b5072290890b70a8f",
+    "inner_factory_zip_sha256": "46aff1ee7570459235c9e7ca7fb1faf6f494dc8100e62b6e132c6d07a6291b71",
+    "signal_sprint_exe_sha256": "beb683b61b4fa4b2ec90fe1d413363c8a535bd4cb72b41b54b03a9685f516ee0"
+  },
+  "live_cli_full_run_json_verified": false,
+  "live_cli_status": "BLOCKED_BY_RUNTIME_DNS_NO_NETWORK",
+  "original_artifact_id": 12706862577,
+  "original_lineage_status": "ARTIFACT_EXACT_BYTES_HOLD",
+  "old_exe_sha_authority_conflict_unresolved": true,
+  "approved_identity_received": true,
+  "human_approval_authenticated": false,
+  "package_version_approved": false,
+  "gdk_assets_approved": false,
+  "gdk_sdk_validated": false,
+  "ready_for_cas": false,
+  "cas_return_pass": false,
+  "real_msixvc_built": false,
+  "e2e_pass": false,
+  "store_submitted": false,
+  "next_gate": "LIVE_FULL_RUN_API_CHECK_AND_AUTHENTICATED_NEW_REQUEST_CAS_APPROVAL",
+  "caveat": "This partial receipt is not the gdk_factory_lineage_adapter.py live CLI PASS. Never use it to release CAS, substitute the old ZIP, or approve MSIXVC2."
+}
