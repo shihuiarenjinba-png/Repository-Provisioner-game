@@ -1,5 +1,7 @@
 """Positive/negative geometry fixtures; none is a real GUI or human QA PASS."""
 import hashlib
+import struct
+import zlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -77,7 +79,16 @@ class VisibilityTests(unittest.TestCase):
         e = evidence()
         with tempfile.TemporaryDirectory() as td:
             screenshot = Path(td) / "actual.png"
-            screenshot.write_bytes(b"real screenshot bytes")
+            def chunk(tag, payload):
+                return (struct.pack(">I", len(payload)) + tag + payload +
+                        struct.pack(">I", zlib.crc32(tag + payload)))
+            ihdr = struct.pack(">IIBBBBB", 1024, 768, 8, 2, 0, 0, 0)
+            pixels = (b"\x00" + b"\x00" * (1024 * 3)) * 768
+            png = (b"\x89PNG\r\n\x1a\n" +
+                   chunk(b"IHDR", ihdr) +
+                   chunk(b"IDAT", zlib.compress(pixels)) +
+                   chunk(b"IEND", b""))
+            screenshot.write_bytes(png)
             self.assertEqual(gate.check(e, screenshot)["reason"], "SCREENSHOT_BYTES_MISMATCH")
             e["screenshot_sha256"] = hashlib.sha256(screenshot.read_bytes()).hexdigest()
             self.assertEqual(gate.check(e, screenshot)["reason"],
