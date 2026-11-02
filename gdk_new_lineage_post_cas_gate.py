@@ -85,7 +85,7 @@ def read_review(path: Path, keys: frozenset[str]) -> tuple[dict, str]:
             reviewer.lower() not in {"test", "tester", "unknown", "placeholder", "tbd", "reviewer"},
             "REVIEWER_INVALID")
     require(type(reviewed_at) is str and re.fullmatch(
-            r"\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d(?:\\.\\d{1,6})?(?:Z|[+-]\\d\\d:\\d\\d)",
+            r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,6})?(?:Z|[+-]\d\d:\d\d)",
             reviewed_at) is not None, "REVIEW_TIMESTAMP_INVALID")
     try:
         timestamp = datetime.fromisoformat(reviewed_at.replace("Z", "+00:00"))
@@ -120,7 +120,7 @@ def verify_cas_git(checkout: Path, cas_sha: str, build_sha: str) -> str:
             type(approved.get("signature_status")) is str and
             bool(approved["signature_status"].strip()) and
             type(approved.get("provided_at")) is str and
-            re.fullmatch(r"\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d(?:\\.\\d{1,6})?(?:Z|[+-]\\d\\d:\\d\\d)",
+            re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,6})?(?:Z|[+-]\d\d:\d\d)",
                          approved["provided_at"]) is not None,
             "CAS_IDENTITY_PROVENANCE_INVALID")
     require(_json(_git(checkout, "show", build_sha + ":" + APPROVED_PATH)) == approved,
