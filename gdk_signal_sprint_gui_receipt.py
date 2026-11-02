@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from gdk_signal_sprint_window_visibility import check as check_window_visibility
 
 SOURCE = "c058cbf7fe38e02d929c67d047d717ff74bd522e"
 REQUEST = ("game-signal-sprint-" + SOURCE +
@@ -57,6 +58,13 @@ def validate(receipt: dict) -> dict:
                 or dimensions[0] < 820 or dimensions[1] < 640):
             result["reason"] = "SCREENSHOT_DIMENSIONS_INVALID"
             return result
+    # Real input evidence alone cannot prove a consumer can see the controls.
+    # A screenshot without matching window/work-area bounds is not sufficient.
+    visibility = check_window_visibility(receipt)
+    result["visibility"] = visibility
+    if visibility["status"] != "WINDOW_VISIBILITY_CHECK_ONLY":
+        result["reason"] = "WINDOW_VISIBILITY_HOLD:" + visibility["reason"]
+        return result
     result["status"] = "WINDOWS_GUI_RECEIPT_AUTOMATED_CHECK_ONLY"
     result["reason"] = "REAL_GUI_AUTOMATION_ONLY_HUMAN_QA_AND_REPLAY_VALUE_HOLD"
     return result
