@@ -16,7 +16,7 @@ import sys
 import zipfile
 from gdk_new_lineage_github_evidence import _get_json, REPO, REPO_ID, API
 from gdk_new_lineage_reissue_check import SOURCE, OLD_REQUEST
-from package_identity_provisioner import PINNED_SIGNAL_SPRINT_GDK_IDENTITY
+from package_identity_provisioner import PINNED_SIGNAL_SPRINT_GDK_IDENTITY, ConflictError
 from gdk_build_intake import _json
 
 LEGACY_ARTIFACT = 12706862577
@@ -68,7 +68,7 @@ def checked_json(raw: bytes) -> dict:
     require(0 < len(raw) <= 65_536, "JSON_SIZE_INVALID")
     try:
         data = _json(raw)
-    except (ValueError, TypeError, RecursionError) as exc:
+    except (ConflictError, ValueError, TypeError, RecursionError) as exc:
         raise FactoryLineageHold("JSON_INVALID") from exc
     require(type(data) is dict, "JSON_NOT_OBJECT")
     return data
