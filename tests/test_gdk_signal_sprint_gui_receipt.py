@@ -23,9 +23,10 @@ def observed():
 
 
 class ReceiptTests(unittest.TestCase):
-    def test_positive_fixture_is_only_automated_check(self):
+    def test_observed_input_without_screen_geometry_is_held(self):
         result = checker.validate(observed())
-        self.assertEqual(result["status"], "WINDOWS_GUI_RECEIPT_AUTOMATED_CHECK_ONLY")
+        self.assertEqual(result["status"], "WINDOWS_GUI_RECEIPT_REVIEW_HOLD")
+        self.assertIn("WINDOW_VISIBILITY_HOLD:SCREENSHOT_NOT_OBSERVED", result["reason"])
         self.assertFalse(result["ready_for_sale"])
         self.assertFalse(result["human_qa_pass"])
 
