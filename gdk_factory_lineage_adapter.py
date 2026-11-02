@@ -96,8 +96,13 @@ def verify_factory_artifact(outer: bytes, run: dict, artifact: dict) -> dict:
     require(type(prs) is list and len(prs) == 1 and type(prs[0]) is dict and
             same(prs[0].get("number"), PR_NUMBER), "GITHUB_PR_NOT_PINNED")
     pr_head = prs[0].get("head")
+    # GitHub's run.pull_requests[].head.sha can follow the PR's *current*
+    # mutable HEAD after the historical run. Never use it to identify bytes.
+    # The immutable run.head_sha is bound to artifact.workflow_run.head_sha,
+    # Factory provenance/receipt build_head_sha, and the outer ZIP digest.
+    # PR number, branch ref and repository id remain mandatory associations.
     require(type(pr_head) is dict and pr_head.get("ref") == BRANCH and
-            pr_head.get("sha") == head and type(pr_head.get("repo")) is dict and
+            type(pr_head.get("repo")) is dict and
             same(pr_head["repo"].get("id"), REPO_ID), "GITHUB_PR_HEAD_MISMATCH")
     arun = artifact.get("workflow_run")
     require(type(arun) is dict and same(arun.get("id"), run_id) and
