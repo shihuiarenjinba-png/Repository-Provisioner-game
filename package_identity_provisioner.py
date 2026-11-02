@@ -36,6 +36,31 @@ STORE_ID = re.compile(r"^[A-Za-z0-9]{8,32}$")
 IDENTITY_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9._-]{2,49}$")
 PACKAGE_FAMILY_NAME = re.compile(r"^[A-Za-z0-9._-]+_[a-z0-9]{13}$")
 PACKAGE_SID = re.compile(r"^S-1-15-2(?:-\d+){7}$")
+GUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+XBOX_TITLE_ID = re.compile(r"^[0-9A-Fa-f]{1,16}$")
+GDK_USER_IDENTITY_SOURCE = "USER_PROVIDED_PARTNER_CENTER"
+# One reviewed GDK product only. A self-consistent but different job/Identity
+# must never be able to CAS an approved-identity.json onto another source.
+PINNED_SIGNAL_SPRINT_JOB = {
+    "request_id": "game-signal-sprint-c058cbf7fe38e02d929c67d047d717ff74bd522e",
+    "product_type": "GAME",
+    "slug": "signal-sprint",
+    "source_factory": "AI-Game-Factory",
+    "source_repository": "shihuiarenjinba-png/AI-Game-Factory",
+    "source_branch": "codex/game-signal-sprint-undo-20261027",
+    "source_sha": "c058cbf7fe38e02d929c67d047d717ff74bd522e",
+}
+PINNED_SIGNAL_SPRINT_GDK_IDENTITY = {
+    "store_id": "9N21MJM7S57P",
+    "name": "OkinawaDesktopTools.SignalSprint",
+    "publisher": "CN=46263F21-A700-41DB-8C9B-114C22FB82FC",
+    "publisher_display_name": "Okinawa Desktop Tools",
+    "package_family_name": "OkinawaDesktopTools.SignalSprint_j8yefg9jgfh58",
+    "package_sid": "S-1-15-2-1437967488-3265478925-1925977903-994526844-2895000717-1943620661-378024715",
+    "xbox_title_id": "68721417",
+    "xbox_scid": "00000000-0000-0000-0000-000068721417",
+    "msa_app_id": "39852fc3-fa46-4bda-88aa-b35385488ced",
+}
 ALLOWED_ACTIONS = {"BUILD_WINDOWS", "INSPECT_PACKAGE", "LOOKUP_OFFICIAL_IDENTITY", "PROPOSE_GITHUB_RETURN"}
 FINAL_STATUSES = {"COMPLETED", "DRY_RUN", "CONFLICT"}
 TRANSIENT_HTTP = {429, 500, 502, 503, 504}
@@ -555,22 +580,84 @@ def inspect_package(path: Path) -> dict[str, Any]:
         raise HoldError(f"Invalid MSIX package: {type(exc).__name__}") from exc
 
 class OfficialIdentityProvider:
-    """Read an operator export from a separately authenticated Partner Center session."""
+    """Read reviewed Store Identity from a local operator-controlled file.
+
+    Legacy authenticated exports remain supported. GDK games may also use the
+    non-secret identifiers explicitly supplied by the user from Partner Center;
+    that path is marked USER_PROVIDED_PARTNER_CENTER and is never treated as a
+    browser-authentication receipt.
+    """
     def __init__(self, evidence_path: Path | None):
         self.evidence_path = evidence_path
 
+    @staticmethod
+    def _validate_common(raw: dict[str, Any], job: Job) -> None:
+        exact = {"request_id": job.request_id, "product_type": job.product_type,
+                 "slug": job.slug, "source_sha": job.source_sha}
+        if any(raw.get(key) != value for key, value in exact.items()):
+            raise ConflictError("Official identity evidence belongs to another product/request/SHA")
+        if not isinstance(raw.get("store_id"), str) or not STORE_ID.fullmatch(raw["store_id"]):
+            raise HoldError("Invalid official Store ID")
+        if not isinstance(raw.get("name"), str) or not IDENTITY_NAME.fullmatch(raw["name"]):
+            raise HoldError("Invalid official Identity Name")
+        if not isinstance(raw.get("publisher"), str) or not raw["publisher"].startswith("CN=") or len(raw["publisher"]) > 512:
+            raise HoldError("Invalid official Publisher")
+        if not isinstance(raw.get("package_family_name"), str) or not PACKAGE_FAMILY_NAME.fullmatch(raw["package_family_name"]):
+            raise HoldError("Invalid official Package Family Name")
+        if not isinstance(raw.get("package_sid"), str) or not PACKAGE_SID.fullmatch(raw["package_sid"]):
+            raise HoldError("Invalid official Package SID")
+
     def lookup(self, job: Job) -> dict[str, Any]:
         if self.evidence_path is None:
-            raise HoldError("No authenticated Partner Center identity evidence was supplied")
+            raise HoldError("No Partner Center identity input was supplied")
         raw = load_json(self.evidence_path, 32_768)
-        required = {"request_id", "product_type", "slug", "source_sha", "authenticated_account", "verified_at",
-                    "official_evidence_url", "store_id", "name", "publisher", "version",
-                    "package_family_name", "package_sid"}
-        if set(raw) != required:
+        legacy_required = {
+            "request_id", "product_type", "slug", "source_sha", "authenticated_account",
+            "verified_at", "official_evidence_url", "store_id", "name", "publisher",
+            "version", "package_family_name", "package_sid",
+        }
+        gdk_required = {
+            "request_id", "product_type", "slug", "source_sha",
+            "identity_source", "provided_at", "store_id", "name", "publisher",
+            "publisher_display_name", "package_family_name", "package_sid",
+            "packaging_family", "xbox_title_id", "xbox_scid", "msa_app_id",
+        }
+        if set(raw) == gdk_required:
+            self._validate_common(raw, job)
+            if any(getattr(job, key) != value for key, value in PINNED_SIGNAL_SPRINT_JOB.items()):
+                raise ConflictError("GDK Identity request is not the immutable Signal Sprint product")
+            if (raw["identity_source"] != GDK_USER_IDENTITY_SOURCE
+                    or raw["packaging_family"] != "GDK"):
+                raise HoldError("Invalid GDK identity source or packaging family")
+            if not isinstance(raw["publisher_display_name"], str) or not raw["publisher_display_name"].strip():
+                raise HoldError("Publisher display name is missing")
+            provided_at = raw["provided_at"]
+            if (not isinstance(provided_at, str) or not re.fullmatch(
+                    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})",
+                    provided_at)):
+                raise HoldError("User-provided Identity timestamp must be RFC3339 with timezone")
+            try:
+                provided_time = datetime.fromisoformat(provided_at.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise HoldError("Invalid user-provided Identity timestamp") from exc
+            if provided_time.astimezone(timezone.utc) > datetime.now(timezone.utc) + timedelta(minutes=5):
+                raise HoldError("User-provided Identity timestamp is in the future")
+            if not isinstance(raw["xbox_title_id"], str) or not XBOX_TITLE_ID.fullmatch(raw["xbox_title_id"]):
+                raise HoldError("Invalid Xbox Title ID")
+            if not isinstance(raw["xbox_scid"], str) or not GUID.fullmatch(raw["xbox_scid"]):
+                raise HoldError("Invalid Xbox SCID")
+            if not isinstance(raw["msa_app_id"], str) or not GUID.fullmatch(raw["msa_app_id"]):
+                raise HoldError("Invalid MSA App ID")
+            # Format validation above gives precise HOLD errors. Valid-shaped but
+            # unreviewed identifiers are provenance conflicts, not alternatives.
+            if any(type(raw.get(key)) is not str or raw[key] != value
+                   for key, value in PINNED_SIGNAL_SPRINT_GDK_IDENTITY.items()):
+                raise ConflictError("GDK Identity differs from the user-reviewed Signal Sprint identifiers")
+            return raw
+
+        if set(raw) != legacy_required:
             raise HoldError("Official identity evidence has missing or unknown fields")
-        exact = {"request_id": job.request_id, "product_type": job.product_type, "slug": job.slug, "source_sha": job.source_sha}
-        if any(raw[key] != value for key, value in exact.items()):
-            raise ConflictError("Official identity evidence belongs to another product/request/SHA")
+        self._validate_common(raw, job)
         if not isinstance(raw["authenticated_account"], str) or not 3 <= len(raw["authenticated_account"]) <= 100:
             raise HoldError("Authenticated Partner Center account identifier is missing")
         verified_at = raw["verified_at"]
@@ -587,19 +674,23 @@ class OfficialIdentityProvider:
         url = urlparse(str(raw["official_evidence_url"]))
         if url.scheme != "https" or url.hostname not in {"partner.microsoft.com", "partnercenter.microsoft.com"} or url.username or url.password or url.fragment:
             raise HoldError("Official evidence URL is not a trusted Partner Center URL")
-        if not isinstance(raw["store_id"], str) or not STORE_ID.fullmatch(raw["store_id"]):
-            raise HoldError("Invalid official Store ID")
-        if not isinstance(raw["name"], str) or not IDENTITY_NAME.fullmatch(raw["name"]):
-            raise HoldError("Invalid official Identity Name")
-        if not isinstance(raw["publisher"], str) or not raw["publisher"].startswith("CN=") or len(raw["publisher"]) > 512:
-            raise HoldError("Invalid official Publisher")
         if not isinstance(raw["version"], str) or not VERSION.fullmatch(raw["version"]):
             raise HoldError("Invalid official version")
-        if not isinstance(raw["package_family_name"], str) or not PACKAGE_FAMILY_NAME.fullmatch(raw["package_family_name"]):
-            raise HoldError("Invalid official Package Family Name")
-        if not isinstance(raw["package_sid"], str) or not PACKAGE_SID.fullmatch(raw["package_sid"]):
-            raise HoldError("Invalid official Package SID")
         return raw
+
+
+def official_identity_response(official: dict[str, Any]) -> dict[str, Any]:
+    status = ("USER_PROVIDED_PARTNER_CENTER"
+              if official.get("identity_source") == GDK_USER_IDENTITY_SOURCE
+              else "VERIFIED_OPERATOR_EXPORT")
+    fields = (
+        "store_id", "name", "publisher", "version", "package_family_name", "package_sid",
+        "official_evidence_url", "verified_at", "identity_source", "provided_at",
+        "publisher_display_name", "packaging_family", "xbox_title_id", "xbox_scid", "msa_app_id",
+    )
+    return {"status": status, **{key: official[key] for key in fields if key in official}}
+
+
 
 
 def compare_package_identity(package: dict[str, Any], official: dict[str, Any]) -> None:
@@ -659,17 +750,32 @@ class GitHubReturnClient:
             raise ConflictError("approved-identity.json already exists and will not be overwritten")
         if head_sha != job.source_sha:
             raise ConflictError("Factory HEAD changed before identity return")
-        approved = {"schema_version": SCHEMA_VERSION, "reviewed": True, "source": "partner_center",
-                    "request_id": job.request_id, "product_type": job.product_type,
-                    "slug": job.slug,
-                    "source_factory": job.source_factory, "source_repository": job.source_repository,
-                    "source_branch": job.source_branch, "source_sha": job.source_sha,
-                    "verified_source_sha": job.source_sha, "package_sha256": package["sha256"],
-                    "package_family_name": official["package_family_name"], "package_sid": official["package_sid"],
-                    "signature_status": package["signature_status"], "store_id": official["store_id"],
-                    "name": official["name"], "publisher": official["publisher"], "version": official["version"],
-                    "verified_by": official["authenticated_account"], "evidence_url": official["official_evidence_url"],
-                    "verified_at": official["verified_at"]}
+        common = {"schema_version": SCHEMA_VERSION, "reviewed": True,
+                  "request_id": job.request_id, "product_type": job.product_type,
+                  "slug": job.slug, "source_factory": job.source_factory,
+                  "source_repository": job.source_repository,
+                  "source_branch": job.source_branch, "source_sha": job.source_sha,
+                  "verified_source_sha": job.source_sha, "package_sha256": package["sha256"],
+                  "package_family_name": official["package_family_name"],
+                  "package_sid": official["package_sid"],
+                  "signature_status": package["signature_status"],
+                  "store_id": official["store_id"], "name": official["name"],
+                  "publisher": official["publisher"]}
+        if official.get("identity_source") == GDK_USER_IDENTITY_SOURCE:
+            approved = {**common, "source": "partner_center_user_provided",
+                        "identity_source": GDK_USER_IDENTITY_SOURCE,
+                        "provided_at": official["provided_at"],
+                        "packaging_family": "GDK",
+                        "publisher_display_name": official["publisher_display_name"],
+                        "xbox_title_id": official["xbox_title_id"],
+                        "xbox_scid": official["xbox_scid"],
+                        "msa_app_id": official["msa_app_id"]}
+        else:
+            approved = {**common, "source": "partner_center",
+                        "version": official["version"],
+                        "verified_by": official["authenticated_account"],
+                        "evidence_url": official["official_evidence_url"],
+                        "verified_at": official["verified_at"]}
         content = json.dumps(approved, ensure_ascii=False, indent=2) + "\n"
         body = {"query": self.MUTATION, "variables": {"input": {
             "branch": {"repositoryNameWithOwner": config.source_repository, "branchName": job.source_branch},
@@ -734,14 +840,9 @@ class GitHubReturnClient:
                                  object_pairs_hook=_unique_json_object)
         except (KeyError, ValueError, TypeError, json.JSONDecodeError):
             return False
-        expected = {
+        common = {
             "schema_version": SCHEMA_VERSION,
             "reviewed": True,
-            "source": "partner_center",
-            **{key: official[key] for key in ("store_id", "name", "publisher", "version")},
-            "verified_by": official["authenticated_account"],
-            "evidence_url": official["official_evidence_url"],
-            "verified_at": official["verified_at"],
             "request_id": job.request_id,
             "product_type": job.product_type,
             "slug": job.slug,
@@ -754,7 +855,25 @@ class GitHubReturnClient:
             "package_family_name": official["package_family_name"],
             "package_sid": official["package_sid"],
             "signature_status": package["signature_status"],
+            "store_id": official["store_id"],
+            "name": official["name"],
+            "publisher": official["publisher"],
         }
+        if official.get("identity_source") == GDK_USER_IDENTITY_SOURCE:
+            expected = {**common, "source": "partner_center_user_provided",
+                        "identity_source": GDK_USER_IDENTITY_SOURCE,
+                        "provided_at": official["provided_at"],
+                        "packaging_family": "GDK",
+                        "publisher_display_name": official["publisher_display_name"],
+                        "xbox_title_id": official["xbox_title_id"],
+                        "xbox_scid": official["xbox_scid"],
+                        "msa_app_id": official["msa_app_id"]}
+        else:
+            expected = {**common, "source": "partner_center",
+                        "version": official["version"],
+                        "verified_by": official["authenticated_account"],
+                        "evidence_url": official["official_evidence_url"],
+                        "verified_at": official["verified_at"]}
         return isinstance(content, dict) and set(content) == set(expected) and all(
             type(content.get(key)) is type(value) and content.get(key) == value
             for key, value in expected.items()
@@ -815,18 +934,30 @@ class Provisioner:
             "request_id": job.request_id, "product_type": job.product_type,
             "source_factory": job.source_factory, "source_repository": job.source_repository,
             "source_branch": job.source_branch, "source_sha": job.source_sha, "slug": job.slug,
-            "status": "HOLD", "next_stage": "OBTAIN_AUTHENTICATED_OFFICIAL_IDENTITY",
+            "status": "HOLD",
         }
         if any(raw.get(key) != value for key, value in expected.items()):
-            raise ConflictError("Resume result belongs to another request, source or stage")
+            raise ConflictError("Resume result belongs to another request or source")
         github_return = raw.get("github_return")
         official_identity = raw.get("official_identity")
+        # Both the original pre-Identity HOLD and the reviewed check-only
+        # HOLD are resumable.  The latter must not force a fresh EXE build:
+        # re-read the supplied official Identity on each attempt and use the
+        # pinned ledger/EXE bytes rather than trusting the result JSON.
+        stage = raw.get("next_stage")
+        identity_status = official_identity.get("status") if isinstance(official_identity, dict) else None
+        valid_checkpoint = (
+            (stage == "OBTAIN_AUTHENTICATED_OFFICIAL_IDENTITY"
+             and identity_status == "UNVERIFIED")
+            or (stage == "APPLY_VERIFIED_GITHUB_RETURN"
+                and identity_status in {"USER_PROVIDED_PARTNER_CENTER", "VERIFIED_OPERATOR_EXPORT"})
+        )
         if (self.config.product_type != "GAME"
                 or not isinstance(github_return, dict)
-                or not isinstance(official_identity, dict)
                 or github_return.get("status") != "NOT_APPLIED"
-                or official_identity.get("status") != "UNVERIFIED"):
-            raise ConflictError("Resume result is not a pre-Identity GAME EXE hold")
+                or raw.get("windows_all_auto_record") is not None
+                or not valid_checkpoint):
+            raise ConflictError("Resume result is not a safe pre-CAS GAME EXE hold")
         previous = raw.get("package")
         if not isinstance(previous, dict) or previous.get("kind") != "exe":
             raise ConflictError("Resume result has no verified GAME EXE")
@@ -878,7 +1009,7 @@ class Provisioner:
                 # terminal *stage*, not a finished MSIX. Never reapply it on replay.
                 prior_response = (previous or {}).get("response", {})
                 if (previous and prior_status == "HOLD"
-                        and prior_response.get("next_stage") == "GITHUB_REBUILD_MSIX"
+                        and prior_response.get("next_stage") in {"GITHUB_REBUILD_MSIX", "BUILD_GDK_MSIXVC_FROM_PINNED_EXE"}
                         and prior_response.get("github_return", {}).get("status")
                         in {"APPLIED", "EXISTING_VERIFIED"}
                         and prior_response.get("package", {}).get("kind") == "exe"):
@@ -937,16 +1068,14 @@ class Provisioner:
                         response = self._base_response(job, "HOLD", started)
                         response.update(
                             package=package,
-                            official_identity={"status": "VERIFIED_OPERATOR_EXPORT",
-                                               **{k: official[k] for k in
-                                                  ("store_id", "name", "publisher", "version",
-                                                   "package_family_name", "package_sid",
-                                                   "official_evidence_url", "verified_at")}},
+                            official_identity=official_identity_response(official),
                             github_return=returned,
                             windows_all_auto_record=None,
-                            errors=["EXE_QA_ONLY: a verified real MSIX is not yet built"],
-                            next_stage=("GITHUB_REBUILD_MSIX" if applied
-                                        else "APPLY_VERIFIED_GITHUB_RETURN"))
+                            errors=["EXE_QA_ONLY: a verified release package is not yet built"],
+                            next_stage=(("BUILD_GDK_MSIXVC_FROM_PINNED_EXE"
+                                         if official.get("packaging_family") == "GDK"
+                                         else "GITHUB_REBUILD_MSIX")
+                                        if applied else "APPLY_VERIFIED_GITHUB_RETURN"))
                         self._save(job, response, {"stage": "EXE_IDENTITY_" + returned["status"],
                                                    "package_sha256": package["sha256"]})
                         return response
@@ -956,10 +1085,7 @@ class Provisioner:
                     returned = self.github.return_identity(job, self.config, official, package, apply=apply)
                     status = "COMPLETED" if returned["status"] in {"APPLIED", "EXISTING_VERIFIED"} else "HOLD"
                     response = self._base_response(job, status, started)
-                    response.update(package=package, official_identity={
-                        "status": "VERIFIED_OPERATOR_EXPORT", **{k: official[k] for k in
-                        ("store_id", "name", "publisher", "version", "package_family_name", "package_sid",
-                         "official_evidence_url", "verified_at")}},
+                    response.update(package=package, official_identity=official_identity_response(official),
                         windows_all_auto_record=contract, github_return=returned,
                         next_stage="GITHUB_REBUILD_MSIX" if status == "COMPLETED" else "APPLY_VERIFIED_GITHUB_RETURN")
                     if status == "HOLD":

@@ -181,5 +181,86 @@ class SignalSprintContractTests(unittest.TestCase):
                     self.assertEqual((src.calls, build.calls, gh.calls), (1, 1, 0))
 
 
+    def test_gdk_check_only_result_can_resume_to_cas_without_rebuild(self):
+        # The latest check-only result should be a valid --resume-result.
+        # CAS is mocked; the only real file is a synthetic PE test fixture.
+        class GdkIdentity:
+            def lookup(self, _job):
+                return {"identity_source": "USER_PROVIDED_PARTNER_CENTER",
+                        "packaging_family": "GDK", "store_id": "9N21MJM7S57P"}
+
+        class ReturnClient:
+            def __init__(self):
+                self.calls = []
+            def return_identity(self, _job, _config, _official, _package, apply):
+                self.calls.append(apply)
+                return {"status": "APPLIED" if apply else "NOT_APPLIED",
+                        "commit_sha": "b" * 40 if apply else None}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src, build, gh = FakeSource(), FakeBuilder(), ReturnClient()
+            p = Provisioner(ProductConfig.load(ROOT / "config.json"),
+                            root / "state", root / "work",
+                            source=src, builder=build, github=gh)
+            initial = p.run(job(False))
+            self.assertEqual(initial["next_stage"], "OBTAIN_AUTHENTICATED_OFFICIAL_IDENTITY")
+            original = root / "pre-identity.json"
+            original.write_text(json.dumps(initial), encoding="utf-8")
+            p.identity = GdkIdentity()
+            p.resume_result = original
+            checked = p.run(job(False), apply=False)
+            self.assertEqual((checked["status"], checked["next_stage"]),
+                             ("HOLD", "APPLY_VERIFIED_GITHUB_RETURN"))
+            self.assertEqual(checked["official_identity"]["status"],
+                             "USER_PROVIDED_PARTNER_CENTER")
+            self.assertEqual(gh.calls, [False])
+            checked_file = root / "check-only.json"
+            checked_file.write_text(json.dumps(checked), encoding="utf-8")
+            p.resume_result = checked_file
+            applied = p.run(job(False), apply=True)
+            self.assertEqual((applied["status"], applied["next_stage"]),
+                             ("HOLD", "BUILD_GDK_MSIXVC_FROM_PINNED_EXE"))
+            self.assertEqual(applied["github_return"]["status"], "APPLIED")
+            self.assertEqual(applied["package"]["sha256"], initial["package"]["sha256"])
+            self.assertIsNone(applied["windows_all_auto_record"])
+            self.assertEqual((src.calls, build.calls, gh.calls), (1, 1, [False, True]))
+            replay = p.run(job(False), apply=True)
+            self.assertTrue(replay["idempotent_replay"])
+            self.assertEqual((src.calls, build.calls, gh.calls), (1, 1, [False, True]))
+
+    def test_gdk_check_only_resume_rejects_forged_stage_without_erasing_ledger(self):
+        class GdkIdentity:
+            def lookup(self, _job):
+                return {"identity_source": "USER_PROVIDED_PARTNER_CENTER",
+                        "packaging_family": "GDK", "store_id": "9N21MJM7S57P"}
+
+        class NoWriteGithub:
+            def return_identity(self, *_args, **_kwargs):
+                raise AssertionError("A forged checkpoint must never reach CAS")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src, build = FakeSource(), FakeBuilder()
+            p = Provisioner(ProductConfig.load(ROOT / "config.json"),
+                            root / "state", root / "work",
+                            source=src, builder=build)
+            initial = p.run(job(False))
+            forged = json.loads(json.dumps(initial))
+            forged["next_stage"] = "APPLY_VERIFIED_GITHUB_RETURN"
+            forged["official_identity"]["status"] = "UNVERIFIED"
+            path = root / "forged.json"
+            path.write_text(json.dumps(forged), encoding="utf-8")
+            p.resume_result = path
+            p.identity = GdkIdentity()
+            p.github = NoWriteGithub()
+            rejected = p.run(job(False), apply=True)
+            self.assertEqual((rejected["status"], rejected["next_stage"]),
+                             ("CONFLICT", "RECONCILE_CONFLICT"))
+            self.assertEqual(p.ledger.read(REQUEST_ID)["response"]["package"]["sha256"],
+                             initial["package"]["sha256"])
+            self.assertEqual((src.calls, build.calls), (1, 1))
+
+
 if __name__ == "__main__":
     unittest.main()
