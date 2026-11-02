@@ -17,6 +17,9 @@ $receipt = [ordered]@{
   process_launched = $false; window_observed = $false; child_process_count = 0; runner_session_id = $null
   first_move_ui_observed = $false; loss_ui_observed = $false; retry_ui_observed = $false
   first_move_seconds = $null; screenshot_captured = $false; screenshot_dimensions = $null
+  monitor_bounds = $null; work_area_bounds = $null; window_bounds = $null
+  coordinate_space = 'SCREEN_COORDINATES_UNVERIFIED'; dpi_percent = $null
+  critical_control_bounds = @()
   input_attempted = $false; visual_change_after_input = $false
   human_qa_pass = $false; consumer_sale_ready = $false; cas_return_pass = $false
   gdk_sdk_executed = $false; real_msixvc_built = $false; store_submitted = $false
@@ -119,6 +122,48 @@ try {
   }
   Require ($null -ne $window -and $window.Current.Name -like 'Signal Sprint*') 'NO_INTERACTIVE_GUI_WINDOW_OR_SESSION'
   $receipt.window_observed = $true
+  # Capture the *work area*, not just the full monitor. Taskbars and other
+  # reserved desktop UI can occlude the last row of gameplay controls.
+  # Tk controls may be absent from UIAutomation: never invent rectangles.
+  $screenInfo = [System.Windows.Forms.Screen]::FromHandle($guiProcess.MainWindowHandle)
+  $monitorRect = $screenInfo.Bounds
+  $workRect = $screenInfo.WorkingArea
+  $winRect = $window.Current.BoundingRectangle
+  $receipt.monitor_bounds = @([int]$monitorRect.Left, [int]$monitorRect.Top,
+                              [int]$monitorRect.Right, [int]$monitorRect.Bottom)
+  $receipt.work_area_bounds = @([int]$workRect.Left, [int]$workRect.Top,
+                                [int]$workRect.Right, [int]$workRect.Bottom)
+  $receipt.window_bounds = @([int]$winRect.Left, [int]$winRect.Top,
+                             [int]$winRect.Right, [int]$winRect.Bottom)
+  try {
+    $g = [System.Drawing.Graphics]::FromHwnd($guiProcess.MainWindowHandle)
+    try { $receipt.dpi_percent = [int][math]::Round($g.DpiX / 96.0 * 100) }
+    finally { $g.Dispose() }
+    # UIA / WinForms coordinate spaces can be virtualized on scaled desktops.
+    # Only 100% DPI is treated as consistent here. 125/150 require separate QA.
+    if ($receipt.dpi_percent -eq 100) {
+      $receipt.coordinate_space = 'SCREEN_PHYSICAL_PIXELS_CONFIRMED'
+    }
+  } catch { $receipt.dpi_reason = 'DPI_NOT_OBSERVABLE' }
+  try {
+    $buttonCondition = [System.Windows.Automation.PropertyCondition]::new(
+      [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+      [System.Windows.Automation.ControlType]::Button)
+    $buttons = $window.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+                               $buttonCondition)
+    $observedControls = @()
+    for ($j = 0; $j -lt $buttons.Count; $j++) {
+      $button = $buttons.Item($j)
+      $r = $button.Current.BoundingRectangle
+      if ($r.Width -gt 0 -and $r.Height -gt 0) {
+        $observedControls += @{
+          name = [string]$button.Current.Name
+          bounds = @([int]$r.Left, [int]$r.Top, [int]$r.Right, [int]$r.Bottom)
+        }
+      }
+    }
+    $receipt.critical_control_bounds = @($observedControls)
+  } catch { $receipt.controls_reason = 'UIAUTOMATION_BUTTON_BOUNDS_UNAVAILABLE' }
   $initial = Names $window
   if ($initial -notmatch 'Moves left:\s*30' -or $initial -notmatch 'Cells:\s*0/3') {
     # Tk labels may be inaccessible to UIAutomation on hosted runners.
