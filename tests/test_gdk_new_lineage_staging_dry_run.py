@@ -99,7 +99,10 @@ class IsolatedStageTests(unittest.TestCase):
 
     def test_symlink_temp_root_rejected(self):
         linked = self.root / "linked"
-        linked.symlink_to(self.root, target_is_directory=True)
+        try:
+            linked.symlink_to(self.root, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("Windows runner cannot create symlinks")
         result = stage.dry_run(self.path, self.receipt, temp_parent=linked)
         self.assertIn("TEMP_PARENT_MISSING_OR_SYMLINK", result["reason"])
 
