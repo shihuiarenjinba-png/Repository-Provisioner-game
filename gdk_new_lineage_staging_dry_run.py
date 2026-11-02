@@ -15,6 +15,7 @@ import tempfile
 from gdk_factory_lineage_adapter import members, MAX_OUTER, MAX_INNER
 from gdk_new_lineage_assembly_plan import safe_file
 from gdk_new_lineage_cross_repo import reconcile, EXPECTED_FILES
+from package_identity_provisioner import HoldError, ConflictError
 from gdk_new_lineage_post_cas_gate import (
     ARTIFACT_ID, BUILD_HEAD, EXE_SHA, INNER_SHA, NEW_REQUEST, OLD_REQUEST,
     OUTER_SHA, RUN_ID, SOURCE,
@@ -106,7 +107,7 @@ def dry_run(outer_zip: Path, live_receipt: dict, *, temp_parent: Path | None = N
         result["reason"] = "REAL_EXE_VERIFIED_BUT_CAS_VERSION_ASSETS_NOT_AUTHORIZED"
         result["artifact_manifest_bound"] = True
         result["evidence_mode"] = "PERSISTED_LIVE_RECEIPT_PLUS_REAL_LOCAL_BYTES"
-    except (ValueError, OSError, TypeError, KeyError, RuntimeError) as exc:
+    except (HoldError, ConflictError, ValueError, OSError, TypeError, KeyError, RuntimeError) as exc:
         result["reason"] = str(exc)
     return result
 
