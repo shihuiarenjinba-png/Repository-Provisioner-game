@@ -102,17 +102,27 @@ def check(receipt: dict, screenshot: Path | None = None) -> dict:
     if not all((monitor, work, window)):
         result["reason"] = "SCREEN_GEOMETRY_MISSING_OR_INVALID"
         return result
-    if not _contained(work, monitor) or not _contained(window, monitor):
-        result["reason"] = "SCREEN_GEOMETRY_INCONSISTENT"
-        return result
-    if dimensions != [window[2] - window[0], window[3] - window[1]]:
-        result["reason"] = "SCREENSHOT_WINDOW_SIZE_MISMATCH"
+    if not _contained(work, monitor):
+        result["reason"] = "WORKAREA_OUTSIDE_MONITOR"
         return result
     result["window_bounds"] = list(window)
+    result["monitor_bounds"] = list(monitor)
     result["work_area_bounds"] = list(work)
-    result["outside_workarea_area_px2"] = (
-        (window[2] - window[0]) * (window[3] - window[1])
-        - _intersection(window, work))
+    window_area = (window[2] - window[0]) * (window[3] - window[1])
+    result["outside_monitor_area_px2"] = window_area - _intersection(window, monitor)
+    result["outside_workarea_area_px2"] = window_area - _intersection(window, work)
+    result["screenshot_cropped"] = dimensions != [
+        window[2] - window[0], window[3] - window[1]]
+    # A real 1024x768 runner has shown a 1040x788 Tk window, a 1024x720
+    # work area, and a cropped 1024x768 screenshot. Report the actual
+    # obstruction before screenshot-size validation; never treat the crop as
+    # proof that controls below the work area are visible.
+    if not _contained(window, monitor):
+        result["reason"] = "WINDOW_OUTSIDE_MONITOR_AND_WORKAREA"
+        return result
+    if result["screenshot_cropped"]:
+        result["reason"] = "SCREENSHOT_WINDOW_SIZE_MISMATCH"
+        return result
     # Even if UIAutomation cannot see Tk controls, the entire game window
     # must be inside the Windows work area. Never infer that hidden buttons
     # are safe from a cropped screenshot.
