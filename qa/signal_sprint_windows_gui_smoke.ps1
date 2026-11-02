@@ -17,6 +17,7 @@ $receipt = [ordered]@{
   process_launched = $false; window_observed = $false; child_process_count = 0; runner_session_id = $null
   first_move_ui_observed = $false; loss_ui_observed = $false; retry_ui_observed = $false
   first_move_seconds = $null; screenshot_captured = $false; screenshot_dimensions = $null
+  input_attempted = $false; visual_change_after_input = $false
   human_qa_pass = $false; consumer_sale_ready = $false; cas_return_pass = $false
   gdk_sdk_executed = $false; real_msixvc_built = $false; store_submitted = $false
 }
@@ -37,6 +38,32 @@ function Names($window) {
   $texts = @()
   for ($i = 0; $i -lt $nodes.Count; $i++) { $texts += [string]$nodes.Item($i).Current.Name }
   return ($texts -join [Environment]::NewLine)
+}
+function Capture-AppWindow([string]$path, $window, [IntPtr]$handle) {
+  try {
+    $bounds = $window.Current.BoundingRectangle
+    $screen = [System.Windows.Forms.Screen]::FromHandle($handle).Bounds
+    $width = [int][math]::Min(1024, $bounds.Width)
+    $height = [int][math]::Min(768, $bounds.Height)
+    if ($width -lt 820 -or $height -lt 640 -or
+        $bounds.Left -lt $screen.Left -or $bounds.Top -lt $screen.Top -or
+        ($bounds.Left + $width) -gt $screen.Right -or
+        ($bounds.Top + $height) -gt $screen.Bottom) { return $false }
+    $bitmap = [System.Drawing.Bitmap]::new($width, $height)
+    try {
+      $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+      try {
+        $graphics.CopyFromScreen([int]$bounds.Left, [int]$bounds.Top, 0, 0,
+          ([System.Drawing.Size]::new($width, $height)))
+      } finally { $graphics.Dispose() }
+      $bitmap.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
+      $receipt.screenshot_dimensions = @($width, $height)
+      return $true
+    } finally { $bitmap.Dispose() }
+  } catch {
+    $receipt.screenshot_reason = 'CAPTURE_NOT_AVAILABLE:' + $_.Exception.GetType().Name
+    return $false
+  }
 }
 function Send-RealKey([string]$key, [int]$targetProcessId) {
   [Microsoft.VisualBasic.Interaction]::AppActivate($targetProcessId) | Out-Null
@@ -93,8 +120,26 @@ try {
   Require ($null -ne $window -and $window.Current.Name -like 'Signal Sprint*') 'NO_INTERACTIVE_GUI_WINDOW_OR_SESSION'
   $receipt.window_observed = $true
   $initial = Names $window
-  Require ($initial -match 'Moves left:\s*30' -and $initial -match 'Cells:\s*0/3') 'INITIAL_GAME_STATE_NOT_OBSERVABLE'
+  if ($initial -notmatch 'Moves left:\s*30' -or $initial -notmatch 'Cells:\s*0/3') {
+    # Tk labels may be inaccessible to UIAutomation on hosted runners.
+    # Record real window pixels and a real input attempt, but NEVER claim
+    # counter, failure reason, retry, or first-30s comprehension PASS.
+    if ($ScreenshotPath -and (Capture-AppWindow $ScreenshotPath $window $guiProcess.MainWindowHandle)) {
+      $receipt.screenshot_captured = $true
+      $receipt.screenshot_sha256 = (Get-FileHash -LiteralPath $ScreenshotPath -Algorithm SHA256).Hash.ToLowerInvariant()
+      $receipt.input_attempted = $true
+      Send-RealKey '{RIGHT}' $guiProcess.Id
+      $afterPath = [System.IO.Path]::ChangeExtension($ScreenshotPath, '.after-right.png')
+      if (Capture-AppWindow $afterPath $window $guiProcess.MainWindowHandle) {
+        $afterSha = (Get-FileHash -LiteralPath $afterPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        $receipt.visual_change_after_input = ($afterSha -ne $receipt.screenshot_sha256)
+        $receipt.after_input_screenshot_sha256 = $afterSha
+      }
+    }
+    throw 'TK_GAME_TEXT_NOT_EXPOSED_TO_UIAUTOMATION_SCREENSHOT_ONLY'
+  }
   Require ($initial -match 'Collect 3 energy cells' -and $initial -match 'Arrows / WASD') 'OBJECTIVE_OR_INPUT_GUIDANCE_NOT_OBSERVABLE'
+  $receipt.input_attempted = $true
   Send-RealKey '{RIGHT}' $guiProcess.Id
   $afterMove = Names $window
   Require ($afterMove -match 'Moves left:\s*29' -and $afterMove -match 'Cells:\s*0/3') 'FIRST_REAL_INPUT_NO_OBSERVABLE_UI_CHANGE'
