@@ -96,6 +96,26 @@ class VisibilityTests(unittest.TestCase):
         e["screenshot_dimensions"] = [1024, 720]
         self.assertEqual(gate.check(e)["reason"], "SCREENSHOT_WINDOW_SIZE_MISMATCH")
 
+    def test_real_windows_smoke_collects_work_area_and_ui_bounds(self):
+        script = (Path(__file__).resolve().parents[1] / "qa" /
+                  "signal_sprint_windows_gui_smoke.ps1").read_text(encoding="utf-8")
+        for field in ("WorkingArea", "window_bounds", "monitor_bounds",
+                      "critical_control_bounds", "coordinate_space", "dpi_percent",
+                      "Get-FileHash", "EXE_SHA256_MISMATCH"):
+            self.assertIn(field, script)
+        self.assertNotIn("consumer_sale_ready = $true", script)
+
+    def test_historical_screenshot_receipt_is_not_promoted(self):
+        import json
+        path = (Path(__file__).resolve().parents[1] / "docs" /
+                "SIGNAL_SPRINT_WINDOW_VISIBILITY_SCREENSHOT_RECEIPT_20261102.json")
+        receipt = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(receipt["screenshot_dimensions"], [1024, 768])
+        self.assertEqual(receipt["screenshot_visual_observation"]["taskbar_top_row_approx"], 720)
+        self.assertEqual(gate.check(receipt)["reason"], "COORDINATE_SPACE_UNVERIFIED")
+        self.assertFalse(receipt["human_qa_pass"])
+        self.assertFalse(receipt["ready_for_sale"])
+
     def test_no_success_claims_in_any_result(self):
         for e in (evidence(), {**evidence(), "work_area_bounds": [0, 0, 1024, 720]}):
             r = gate.check(e)
