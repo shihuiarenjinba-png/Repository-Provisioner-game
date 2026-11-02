@@ -40,6 +40,27 @@ class VisibilityTests(unittest.TestCase):
         self.assertEqual(r["reason"], "WINDOW_OVERLAPS_TASKBAR_OR_RESERVED_WORKAREA")
         self.assertEqual(r["outside_workarea_area_px2"], 1024 * 48)
 
+    def test_real_1024x768_windows_runner_geometry_fails_closed(self):
+        # Actual check-only run 41412293078: Tk window 1040x788,
+        # 1024x768 monitor, 1024x720 work area, 1024x768 cropped PNG.
+        e = evidence()
+        e["monitor_bounds"] = [0, 0, 1024, 768]
+        e["work_area_bounds"] = [0, 0, 1024, 720]
+        e["window_bounds"] = [0, 0, 1040, 788]
+        e["critical_control_bounds"] = []
+        r = gate.check(e)
+        self.assertEqual(r["reason"], "WINDOW_OUTSIDE_MONITOR_AND_WORKAREA")
+        self.assertEqual(r["outside_monitor_area_px2"], 1040 * 788 - 1024 * 768)
+        self.assertEqual(r["outside_workarea_area_px2"], 1040 * 788 - 1024 * 720)
+        self.assertTrue(r["screenshot_cropped"])
+        self.assertFalse(r["ready_for_sale"])
+        self.assertFalse(r["human_qa_pass"])
+
+    def test_work_area_outside_monitor_is_not_accepted(self):
+        e = evidence()
+        e["work_area_bounds"] = [0, 0, 1100, 768]
+        self.assertEqual(gate.check(e)["reason"], "WORKAREA_OUTSIDE_MONITOR")
+
     def test_left_or_top_docked_taskbar_detected(self):
         for work in ([60, 0, 1024, 768], [0, 40, 1024, 768]):
             with self.subTest(work=work):
