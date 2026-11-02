@@ -193,6 +193,25 @@ class FactoryLineageAdapterTests(unittest.TestCase):
         self.run["pull_requests"][0]["number"] = 16
         self.check_hold("GITHUB_PR_NOT_PINNED")
 
+    def test_mutable_pr_head_sha_does_not_replace_immutable_run_head(self):
+        # GitHub's linked PR metadata may move after the historical run.
+        self.run["pull_requests"][0]["head"]["sha"] = "f" * 40
+        result = verify_factory_artifact(self.outer, self.run, self.artifact)
+        self.assertEqual(result["build_head_sha"], HEAD)
+        self.assertIs(result["ready_for_cas"], False)
+
+    def test_wrong_linked_pr_branch_rejected(self):
+        self.run["pull_requests"][0]["head"]["ref"] = "other-game-branch"
+        self.check_hold("GITHUB_PR_HEAD_MISMATCH")
+
+    def test_wrong_linked_pr_repo_rejected(self):
+        self.run["pull_requests"][0]["head"]["repo"]["id"] = REPO_ID + 1
+        self.check_hold("GITHUB_PR_HEAD_MISMATCH")
+
+    def test_mutated_immutable_run_head_still_rejected(self):
+        self.run["head_sha"] = "f" * 40
+        self.check_hold("GITHUB_ARTIFACT_RUN_MISMATCH|FACTORY_BUILD_LINEAGE_MISMATCH")
+
     def test_foreign_artifact(self):
         self.artifact["workflow_run"]["id"] = 999
         self.check_hold("GITHUB_ARTIFACT_RUN_MISMATCH")
