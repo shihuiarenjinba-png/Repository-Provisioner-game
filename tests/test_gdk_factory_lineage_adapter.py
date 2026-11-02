@@ -143,6 +143,48 @@ class FactoryLineageAdapterTests(unittest.TestCase):
         resign_artifact(self.outer, self.artifact)
         self.check_hold("UNAUTHENTICATED_APPROVAL_CLAIM")
 
+    def test_foreign_xbox_title_claim_rejected(self):
+        self.outer = change_json(self.outer, "new-lineage.zip", "provenance.json",
+                                 "xbox_title_id", "99999999")
+        resign_artifact(self.outer, self.artifact)
+        self.check_hold("UNAUTHENTICATED_APPROVAL_CLAIM")
+
+    def test_foreign_scid_and_msa_claims_rejected(self):
+        for key, value in (
+            ("xbox_scid", "00000000-0000-0000-0000-000000000001"),
+            ("msa_app_id", "00000000-0000-0000-0000-000000000001"),
+        ):
+            with self.subTest(key=key):
+                outer = change_json(self.outer, None, "lineage-receipt.json", key, value)
+                artifact = copy.deepcopy(self.artifact)
+                resign_artifact(outer, artifact)
+                with self.assertRaisesRegex(FactoryLineageHold, "UNAUTHENTICATED_APPROVAL_CLAIM"):
+                    verify_factory_artifact(outer, self.run, artifact)
+
+    def test_untrusted_version_review_claim_rejected(self):
+        self.outer = change_json(self.outer, None, "lineage-receipt.json",
+                                 "version_review_authenticity_verified", True)
+        resign_artifact(self.outer, self.artifact)
+        self.check_hold("UNAUTHENTICATED_APPROVAL_CLAIM")
+
+    def test_unapproved_asset_claim_rejected(self):
+        self.outer = change_json(self.outer, "new-lineage.zip", "provisioner-request.json",
+                                 "gdk_assets_approved", True)
+        resign_artifact(self.outer, self.artifact)
+        self.check_hold("UNAUTHENTICATED_APPROVAL_CLAIM")
+
+    def test_fake_gdk_sdk_success_rejected(self):
+        self.outer = change_json(self.outer, None, "lineage-receipt.json",
+                                 "gdk_sdk_validated", True)
+        resign_artifact(self.outer, self.artifact)
+        self.check_hold("UNAUTHENTICATED_APPROVAL_CLAIM")
+
+    def test_foreign_identity_in_request_rejected(self):
+        self.outer = change_json(self.outer, "new-lineage.zip", "provisioner-request.json",
+                                 "identity", {"store_id": "FOREIGN"})
+        resign_artifact(self.outer, self.artifact)
+        self.check_hold("UNAUTHENTICATED_APPROVAL_CLAIM")
+
     def test_wrong_event(self):
         self.run["event"] = "workflow_dispatch"
         self.check_hold("GITHUB_EVENT_NOT_FACTORY_PR")
