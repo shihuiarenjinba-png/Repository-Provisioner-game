@@ -163,8 +163,19 @@ def verify_factory_artifact(outer: bytes, run: dict, artifact: dict) -> dict:
         "target_owner": "shihuiarenjinba-png", "display_name": "Signal Sprint - Offline Route Puzzle",
         "requested_actions": ["BUILD_WINDOWS", "INSPECT_PACKAGE", "LOOKUP_OFFICIAL_IDENTITY", "PROPOSE_GITHUB_RETURN"],
     }.items()), "FACTORY_INTAKE_INVALID")
-    require(not any(k in receipt or k in provenance or k in request for k in
-                    ("approved_identity", "review_approved", "package_version_approved", "cas_return_pass")),
+    # Factory-v1 is an unsigned EXE receipt, not an Identity, review, SDK or
+    # package authority. Reject injected downstream claims even if the GitHub
+    # outer ZIP is rehashed: the artifact's own metadata cannot approve itself.
+    untrusted_claim_keys = (
+        "approved_identity", "identity", "store_id", "package_identity_name",
+        "xbox_title_id", "xbox_scid", "msa_app_id",
+        "review_approved", "package_version", "package_version_approved",
+        "version_review_authenticity_verified", "gdk_assets_approved",
+        "gdk_sdk_validated", "real_msixvc_built", "cas_return_pass",
+        "e2e_pass", "store_submitted",
+    )
+    require(not any(key in obj for obj in (receipt, provenance, request)
+                    for key in untrusted_claim_keys),
             "UNAUTHENTICATED_APPROVAL_CLAIM")
     return {
         "schema_version": 1, "product": "Signal Sprint", "partner_center_selection": "GDK_GAME",
