@@ -75,7 +75,7 @@ def check(receipt: dict, screenshot: Path | None = None) -> dict:
             if hashlib.sha256(data).hexdigest() != digest:
                 result["reason"] = "SCREENSHOT_BYTES_MISMATCH"
                 return result
-            if (len(data) < 24 or data[:8] != b"\\x89PNG\\r\\n\\x1a\\n"
+            if (len(data) < 24 or data[:8] != b"\x89PNG\r\n\x1a\n"
                     or data[12:16] != b"IHDR"):
                 result["reason"] = "SCREENSHOT_NOT_PNG"
                 return result
