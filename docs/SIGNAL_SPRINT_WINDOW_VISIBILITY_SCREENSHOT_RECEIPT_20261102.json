@@ -35,5 +35,10 @@
   "real_msixvc_built": false,
   "store_submitted": false,
   "next_step": "Run updated Windows GUI smoke on the same pinned artifact; capture Screen.WorkingArea, UIA window and critical control rectangles, screenshot hashes and DPI. HOLD if UIA unavailable or 125/150 untested.",
-  "original_expired_artifact_status": "ARTIFACT_EXACT_BYTES_HOLD"
+  "original_expired_artifact_status": "ARTIFACT_EXACT_BYTES_HOLD",
+  "screenshot_captured": true,
+  "screenshot_sha256": "78fbe24464731765268e9268a024293d83a361bcbe038d706b3993daf5e38422",
+  "coordinate_space": "SCREEN_COORDINATES_UNVERIFIED",
+  "monitor_bounds": null,
+  "dpi_percent": null
 }
