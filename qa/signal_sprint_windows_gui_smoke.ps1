@@ -14,7 +14,7 @@ $receipt = [ordered]@{
   github_run_id = 41361263698; github_artifact_id = 13105352227
   exe_sha256 = $expectedSha; exe_size_bytes = $expectedSize
   status = 'WINDOWS_GUI_CHECK_ONLY_HOLD'; reason = 'NOT_EXECUTED'
-  process_launched = $false; window_observed = $false
+  process_launched = $false; window_observed = $false; child_process_count = 0; runner_session_id = $null
   first_move_ui_observed = $false; loss_ui_observed = $false; retry_ui_observed = $false
   first_move_seconds = $null; screenshot_captured = $false; screenshot_dimensions = $null
   human_qa_pass = $false; consumer_sale_ready = $false; cas_return_pass = $false
@@ -62,42 +62,60 @@ try {
   $timer = [System.Diagnostics.Stopwatch]::StartNew()
   $proc = Start-Process -FilePath (Resolve-Path -LiteralPath $ExePath).Path -WorkingDirectory $file.DirectoryName -PassThru
   $receipt.process_launched = $true
+  $receipt.runner_session_id = $proc.SessionId
   $window = $null
+  $guiProcess = $null
   for ($attempt = 0; $attempt -lt 35; $attempt++) {
     Start-Sleep -Milliseconds 500
     $proc.Refresh()
     if ($proc.HasExited) { throw ('PROCESS_EXITED_BEFORE_WINDOW:' + $proc.ExitCode) }
-    if ($proc.MainWindowHandle -ne [IntPtr]::Zero) {
-      $window = [System.Windows.Automation.AutomationElement]::FromHandle($proc.MainWindowHandle)
-      if ($null -ne $window -and $window.Current.Name -like 'Signal Sprint*') { break }
+    # PyInstaller --onefile commonly launches a child with the Tk window.
+    # Inspect only direct children of our own process; never attach to another game.
+    $candidates = @($proc)
+    $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId = $($proc.Id)" -ErrorAction SilentlyContinue)
+    $receipt.child_process_count = [math]::Max($receipt.child_process_count, $children.Count)
+    foreach ($child in $children) {
+      $candidate = Get-Process -Id $child.ProcessId -ErrorAction SilentlyContinue
+      if ($null -ne $candidate) { $candidates += $candidate }
     }
+    foreach ($candidate in $candidates) {
+      $candidate.Refresh()
+      if ($candidate.HasExited -or $candidate.MainWindowHandle -eq [IntPtr]::Zero) { continue }
+      $found = [System.Windows.Automation.AutomationElement]::FromHandle($candidate.MainWindowHandle)
+      if ($null -ne $found -and $found.Current.Name -like 'Signal Sprint*') {
+        $window = $found
+        $guiProcess = $candidate
+        break
+      }
+    }
+    if ($null -ne $window) { break }
   }
   Require ($null -ne $window -and $window.Current.Name -like 'Signal Sprint*') 'NO_INTERACTIVE_GUI_WINDOW_OR_SESSION'
   $receipt.window_observed = $true
   $initial = Names $window
   Require ($initial -match 'Moves left:\s*30' -and $initial -match 'Cells:\s*0/3') 'INITIAL_GAME_STATE_NOT_OBSERVABLE'
   Require ($initial -match 'Collect 3 energy cells' -and $initial -match 'Arrows / WASD') 'OBJECTIVE_OR_INPUT_GUIDANCE_NOT_OBSERVABLE'
-  Send-RealKey '{RIGHT}' $proc.Id
+  Send-RealKey '{RIGHT}' $guiProcess.Id
   $afterMove = Names $window
   Require ($afterMove -match 'Moves left:\s*29' -and $afterMove -match 'Cells:\s*0/3') 'FIRST_REAL_INPUT_NO_OBSERVABLE_UI_CHANGE'
   $receipt.first_move_ui_observed = $true
   $receipt.first_move_seconds = [math]::Round($timer.Elapsed.TotalSeconds, 3)
   Require ($receipt.first_move_seconds -le 30) 'FIRST_INPUT_EXCEEDS_30_SECONDS'
   for ($i = 0; $i -lt 29; $i++) {
-    if (($i % 2) -eq 0) { Send-RealKey '{LEFT}' $proc.Id }
-    else { Send-RealKey '{RIGHT}' $proc.Id }
+    if (($i % 2) -eq 0) { Send-RealKey '{LEFT}' $guiProcess.Id }
+    else { Send-RealKey '{RIGHT}' $guiProcess.Id }
   }
   $afterLoss = Names $window
   Require ($afterLoss -match 'LOST' -and $afterLoss -match 'Out of moves') 'LOSS_REASON_NOT_OBSERVABLE'
   $receipt.loss_ui_observed = $true
-  Send-RealKey 'r' $proc.Id
+  Send-RealKey 'r' $guiProcess.Id
   $afterRetry = Names $window
   Require ($afterRetry -match 'PLAYING' -and $afterRetry -match 'Moves left:\s*30') 'RETRY_DID_NOT_RESET_UI'
   $receipt.retry_ui_observed = $true
   if ($ScreenshotPath) {
     try {
       $bounds = $window.Current.BoundingRectangle
-      $screen = [System.Windows.Forms.Screen]::FromHandle($proc.MainWindowHandle).Bounds
+      $screen = [System.Windows.Forms.Screen]::FromHandle($guiProcess.MainWindowHandle).Bounds
       $width = [int][math]::Min(1024, $bounds.Width)
       $height = [int][math]::Min(768, $bounds.Height)
       if ($width -ge 820 -and $height -ge 640 -and
@@ -127,7 +145,11 @@ try {
   if ($null -ne $proc) {
     try {
       $proc.Refresh()
-      if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction Stop }
+      if (-not $proc.HasExited) {
+        $childrenToStop = @(Get-CimInstance Win32_Process -Filter "ParentProcessId = $($proc.Id)" -ErrorAction SilentlyContinue)
+        foreach ($child in $childrenToStop) { Stop-Process -Id $child.ProcessId -Force -ErrorAction SilentlyContinue }
+        Stop-Process -Id $proc.Id -Force -ErrorAction Stop
+      }
     } catch { $receipt.process_cleanup_warning = $_.Exception.Message }
   }
   Save-Receipt
