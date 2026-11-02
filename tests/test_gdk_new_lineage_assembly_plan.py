@@ -104,7 +104,8 @@ class AssemblyPlanTests(unittest.TestCase):
         self.assertEqual(result["status"], "NEW_LINEAGE_GDK_ASSEMBLY_HOLD")
         self.assertIn(code, result["reason"])
         self.assertFalse(result["staging_created"])
-        self.assertFalse(self.target.exists())
+        if code != "STAGING_TARGET_ALREADY_EXISTS":
+            self.assertFalse(self.target.exists())
         self.assertNotIn("files", result)
 
     def test_positive_deterministic_plan_without_staging(self):
