@@ -7,38 +7,43 @@ import unittest
 
 from package_identity_provisioner import (
     GitHubReturnClient, Job, OfficialIdentityProvider, ProductConfig,
+    signal_sprint_gdk_lineage,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_SHA = "c058cbf7fe38e02d929c67d047d717ff74bd522e"
 REQUEST_ID = "game-signal-sprint-" + SOURCE_SHA
+CURRENT_SOURCE_SHA = "1a349faa41663c417c40710140a4d50c79b62b78"
+CURRENT_REQUEST_ID = "game-signal-sprint-" + CURRENT_SOURCE_SHA
+CURRENT_SOURCE_BRANCH = "codex/signal-sprint-frozen-source-ref-20261124"
+LEGACY_SOURCE_BRANCH = "codex/game-signal-sprint-undo-20261027"
 
 
-def raw_job():
+def raw_job(source_sha=SOURCE_SHA, request_id=None, source_branch=LEGACY_SOURCE_BRANCH, dry_run=False):
     cfg = ProductConfig.load(ROOT / "config.json")
     return {
         "schema_version": "1.0",
-        "request_id": REQUEST_ID,
+        "request_id": request_id or ("game-signal-sprint-" + source_sha),
         "product_type": "GAME",
         "source_factory": "AI-Game-Factory",
         "source_repository": "shihuiarenjinba-png/AI-Game-Factory",
-        "source_branch": "codex/game-signal-sprint-undo-20261027",
-        "source_sha": SOURCE_SHA,
+        "source_branch": source_branch,
+        "source_sha": source_sha,
         "slug": "signal-sprint",
         "display_name": "Signal Sprint",
         "target_owner": cfg.target_owner,
-        "dry_run": False,
+        "dry_run": dry_run,
         "requested_actions": ["BUILD_WINDOWS", "INSPECT_PACKAGE",
                               "LOOKUP_OFFICIAL_IDENTITY", "PROPOSE_GITHUB_RETURN"],
     }
 
 
-def gdk_identity():
+def gdk_identity(source_sha=SOURCE_SHA, request_id=None):
     return {
-        "request_id": REQUEST_ID,
+        "request_id": request_id or ("game-signal-sprint-" + source_sha),
         "product_type": "GAME",
         "slug": "signal-sprint",
-        "source_sha": SOURCE_SHA,
+        "source_sha": source_sha,
         "identity_source": "USER_PROVIDED_PARTNER_CENTER",
         "provided_at": "2026-10-28T10:49:00+09:00",
         "store_id": "9N21MJM7S57P",
@@ -122,7 +127,7 @@ class GdkIdentityContractTests(unittest.TestCase):
             bad_identity["request_id"] = bad_job["request_id"]
             path = Path(tmp) / "official-identity.json"
             path.write_text(json.dumps(bad_identity), encoding="utf-8")
-            with self.assertRaisesRegex(Exception, "immutable Signal Sprint"):
+            with self.assertRaisesRegex(Exception, "allowlisted Signal Sprint source/request lineage"):
                 OfficialIdentityProvider(path).lookup(
                     Job.validate(bad_job, ProductConfig.load(ROOT / "config.json")))
 
@@ -140,7 +145,7 @@ class GdkIdentityContractTests(unittest.TestCase):
                     if field == "request_id":
                         bad_identity[field] = value
                     path.write_text(json.dumps(bad_identity), encoding="utf-8")
-                    with self.assertRaisesRegex(Exception, "immutable Signal Sprint"):
+                    with self.assertRaisesRegex(Exception, "allowlisted Signal Sprint source/request lineage"):
                         OfficialIdentityProvider(path).lookup(
                             Job.validate(bad_job, ProductConfig.load(ROOT / "config.json")))
 
@@ -176,6 +181,100 @@ class GdkIdentityContractTests(unittest.TestCase):
             with self.assertRaisesRegex(Exception, "Xbox SCID"):
                 OfficialIdentityProvider(path).lookup(
                     Job.validate(raw_job(), ProductConfig.load(ROOT / "config.json")))
+
+    def test_current_frozen_source_identity_is_accepted_as_exact_dry_run_lineage(self):
+        config = ProductConfig.load(ROOT / "config.json")
+        job = Job.validate(
+            raw_job(CURRENT_SOURCE_SHA, CURRENT_REQUEST_ID, CURRENT_SOURCE_BRANCH, dry_run=True),
+            config,
+        )
+        identity = gdk_identity(CURRENT_SOURCE_SHA, CURRENT_REQUEST_ID)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "official-identity.json"
+            path.write_text(json.dumps(identity), encoding="utf-8")
+            official = OfficialIdentityProvider(path).lookup(job)
+
+        self.assertEqual(signal_sprint_gdk_lineage(job), "CURRENT_1A349")
+        self.assertEqual(official["source_sha"], CURRENT_SOURCE_SHA)
+        self.assertEqual(official["request_id"], CURRENT_REQUEST_ID)
+        self.assertTrue(job.dry_run)
+        self.assertEqual(official["packaging_family"], "GDK")
+        self.assertNotIn("version", official)
+
+    def test_current_frozen_source_dry_run_never_calls_github_or_applies_cas(self):
+        config = ProductConfig.load(ROOT / "config.json")
+        job = Job.validate(
+            raw_job(CURRENT_SOURCE_SHA, CURRENT_REQUEST_ID, CURRENT_SOURCE_BRANCH, dry_run=True),
+            config,
+        )
+        identity = gdk_identity(CURRENT_SOURCE_SHA, CURRENT_REQUEST_ID)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "official-identity.json"
+            path.write_text(json.dumps(identity), encoding="utf-8")
+            official = OfficialIdentityProvider(path).lookup(job)
+
+        calls = []
+        def api(endpoint, body=None, allow_missing=False):
+            calls.append((endpoint, body))
+            raise AssertionError("dry-run must not call GitHub")
+
+        result = GitHubReturnClient(api).return_identity(
+            job, config, official,
+            {"sha256": "d" * 64, "signature_status": "NOTSIGNED"},
+            apply=False,
+        )
+        self.assertEqual(result["status"], "NOT_APPLIED")
+        self.assertEqual(calls, [])
+
+    def test_current_request_rejects_legacy_identity_and_legacy_request_rejects_current_identity(self):
+        config = ProductConfig.load(ROOT / "config.json")
+        pairs = (
+            (
+                raw_job(CURRENT_SOURCE_SHA, CURRENT_REQUEST_ID, CURRENT_SOURCE_BRANCH, dry_run=True),
+                gdk_identity(SOURCE_SHA, REQUEST_ID),
+            ),
+            (
+                raw_job(SOURCE_SHA, REQUEST_ID, LEGACY_SOURCE_BRANCH, dry_run=True),
+                gdk_identity(CURRENT_SOURCE_SHA, CURRENT_REQUEST_ID),
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "official-identity.json"
+            for raw, identity in pairs:
+                with self.subTest(job_source=raw["source_sha"], identity_source=identity["source_sha"]):
+                    path.write_text(json.dumps(identity), encoding="utf-8")
+                    job = Job.validate(raw, config)
+                    with self.assertRaisesRegex(Exception, "another product/request/SHA"):
+                        OfficialIdentityProvider(path).lookup(job)
+
+    def test_current_source_rejects_self_consistent_unallowlisted_request_and_branch(self):
+        config = ProductConfig.load(ROOT / "config.json")
+        bad_cases = (
+            (
+                raw_job(CURRENT_SOURCE_SHA, "game-signal-sprint-unreviewed-current-request",
+                        CURRENT_SOURCE_BRANCH, dry_run=True),
+                "game-signal-sprint-unreviewed-current-request",
+            ),
+            (
+                raw_job(CURRENT_SOURCE_SHA, CURRENT_REQUEST_ID,
+                        "codex/unreviewed-signal-sprint-branch", dry_run=True),
+                CURRENT_REQUEST_ID,
+            ),
+            (
+                raw_job("a" * 40, "game-signal-sprint-" + "a" * 40,
+                        CURRENT_SOURCE_BRANCH, dry_run=True),
+                "game-signal-sprint-" + "a" * 40,
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "official-identity.json"
+            for raw, identity_request in bad_cases:
+                with self.subTest(request_id=raw["request_id"], source_sha=raw["source_sha"]):
+                    identity = gdk_identity(raw["source_sha"], identity_request)
+                    path.write_text(json.dumps(identity), encoding="utf-8")
+                    job = Job.validate(raw, config)
+                    with self.assertRaisesRegex(Exception, "allowlisted Signal Sprint source/request lineage"):
+                        OfficialIdentityProvider(path).lookup(job)
 
 
 if __name__ == "__main__":
