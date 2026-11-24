@@ -35,12 +35,12 @@
   },
   "request_provenance": {
     "readiness_artifact": {
-      "artifact_id": 14919333099,
+      "artifact_id": 14933406309,
       "name": "signal-sprint-gdk-package-readiness",
-      "zip_sha256": "a03683fbfc38c9c53e3cd2207a1ccda300bbb2f17dcc7f1666252a10ceff451b",
-      "zip_size_bytes": 3829
+      "zip_sha256": "0bc51f8668d98071da1bc29a27c969b49675b1f8bb64c287eb6cbf6e4ab9ed28",
+      "zip_size_bytes": 3826
     },
-    "readiness_file_sha256": "7daabff2df532519610f6c4a5a43cf8c4867c998a1de62ea2db03709665ab59f",
+    "readiness_file_sha256": "0976731b118fe704808d07b4b950e820c583c04a4252b2ca0eea32e62d6e594f",
     "request_payload_sha256": "4cdeeb786dc1508785eb3d41356b8f2ad15c33355ec2db22a3298d2c60b51a3b",
     "request_id": "game-signal-sprint-1a349faa41663c417c40710140a4d50c79b62b78",
     "source_sha": "1a349faa41663c417c40710140a4d50c79b62b78",
@@ -52,25 +52,25 @@
     "status": "PASS_INDEPENDENT_BUILD_ONLY",
     "source_sha": "1a349faa41663c417c40710140a4d50c79b62b78",
     "pr30_source_sha": "a377043d3c9ab0c71d9a100cdb841dd7000313b9",
-    "run_id": 45393586733,
-    "run_url": "https://github.com/shihuiarenjinba-png/AI-Game-Factory/actions/runs/45393586733",
+    "run_id": 45418088785,
+    "run_url": "https://github.com/shihuiarenjinba-png/AI-Game-Factory/actions/runs/45418088785",
     "run_status": "completed",
     "run_conclusion": "success",
     "completed_run_required": true,
-    "workflow_head_sha": "7e624a2bc698e3659cec61ff30191450a1f62c33",
-    "exe_artifact_id": 14920216319,
-    "exe_artifact_zip_sha256": "a945a914f27fa6ae4268fd7ed6caef3e2722c740164e69f957802f6e73e366d2",
-    "exe_sha256": "70e48305583f513c2c29dc266d89918c9586aea382632f5f8a900f545b56fc26",
-    "exe_size_bytes": 11453717,
+    "workflow_head_sha": "90728ddb99303736c97bc95a8c019796601b1a2a",
+    "exe_artifact_id": 14931068646,
+    "exe_artifact_zip_sha256": "3b76321df9f8b1c4a9883d8bade57f0e33a232e18b989cf2e0bba057dafcdba1",
+    "exe_sha256": "4b08ff7caa4a76852bbfe47a69c1ceb70fbf7cecfaf4cfade82e2b882959bd06",
+    "exe_size_bytes": 11453716,
     "attestation_artifact": {
-      "artifact_id": 14920261911,
+      "artifact_id": 14932802178,
       "name": "signal-sprint-completed-build-attestation",
-      "zip_sha256": "e6513752f414fbcb76816e519181de9a5dd6908d8e1f74b82c0531700a998e6c",
-      "zip_size_bytes": 11208841
+      "zip_sha256": "2ef718bc63b024e55505aba8e34f8ae5ccda1cec5e41fa38c4854d6381db4362",
+      "zip_size_bytes": 11208696
     },
-    "attestation_file_sha256": "8b9ae25373401cb9d2b261cc5a48d02be1825cb5809366c34ee4646c5769b4f5",
-    "build_proof_artifact_id": 14919942471,
-    "build_proof_artifact_digest": "sha256:796ee10764d92a5dced69d8c1895a761655eece60a40721ed7ac9f4dbd273f55",
+    "attestation_file_sha256": "0ffc52db3d4d85f7f582075977d098bd4e488bfad82bc82aef39c96f89050968",
+    "build_proof_artifact_id": 14931443640,
+    "build_proof_artifact_digest": "sha256:2d6abf85d56d3d1aa0eb383c1912012c5bd3ba7bb2286d8aa85a542a7fbf72cc",
     "build_proof_artifact_zip_size_bytes": 2172,
     "independent_build_verified": true,
     "build_provenance_verified": true,
@@ -97,5 +97,5 @@
     "ordinary_msix_allowed": false
   },
   "next_stage": "EXPLICIT_CAS_REVIEW_REQUIRED",
-  "receipt_sha256": "6b97f94bdba345f1e485b944bc48c7969a2bbf9cea3a5047953bb6164d0c177a"
+  "receipt_sha256": "ae0e8ecad3368ede9ef6727aa777f2ddf6ce7db88bee1c57c3bc9c04521ba38a"
 }
