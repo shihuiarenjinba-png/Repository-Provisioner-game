@@ -474,7 +474,7 @@ class GdkIdentityContractTests(unittest.TestCase):
 
     def test_preview_receipt_validator_recomputes_identity_fingerprint(self):
         receipt = build_gdk_identity_return_preview_receipt(*preview_fixture())
-        receipt["identity_reference"]["identifiers"]["store_id"] = "9N21MJM7S57R"
+        receipt["identity_reference"]["fingerprint_sha256"] = "9" * 64
         receipt["receipt_sha256"] = canonical_hash({
             key: value for key, value in receipt.items() if key != "receipt_sha256"
         })
