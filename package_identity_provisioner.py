@@ -777,6 +777,18 @@ def validate_gdk_identity_return_preview_receipt(receipt: dict[str, Any]) -> boo
             "GDK_RETURN_PREVIEW_IDENTITY_FINGERPRINT_INVALID")
     require(identity.get("identifiers") == PINNED_SIGNAL_SPRINT_GDK_IDENTITY,
             "GDK_RETURN_PREVIEW_IDENTITY_IDENTIFIERS_MISMATCH")
+    identity_payload = {
+        "request_id": receipt["request_id"],
+        "product_type": receipt["product_type"],
+        "slug": "signal-sprint",
+        "source_sha": receipt["source_sha"],
+        "identity_source": identity["type"],
+        "provided_at": identity["provided_at"],
+        **identity["identifiers"],
+        "packaging_family": receipt["registration_family"],
+    }
+    require(canonical_hash(identity_payload) == fingerprint,
+            "GDK_RETURN_PREVIEW_IDENTITY_FINGERPRINT_MISMATCH")
 
     target = receipt.get("return_target")
     require(isinstance(target, dict), "GDK_RETURN_PREVIEW_TARGET_MISSING")
@@ -808,6 +820,7 @@ def validate_gdk_identity_return_preview_receipt(receipt: dict[str, Any]) -> boo
             "GDK_RETURN_PREVIEW_READINESS_FILE_SHA_INVALID")
     readiness_artifact = request.get("readiness_artifact")
     require(isinstance(readiness_artifact, dict)
+            and readiness_artifact.get("name") == "signal-sprint-gdk-package-readiness"
             and type(readiness_artifact.get("artifact_id")) is int
             and readiness_artifact["artifact_id"] > 0
             and isinstance(readiness_artifact.get("zip_sha256"), str)
@@ -847,8 +860,22 @@ def validate_gdk_identity_return_preview_receipt(receipt: dict[str, Any]) -> boo
     require(isinstance(build.get("attestation_file_sha256"), str)
             and re.fullmatch(r"[a-f0-9]{64}", build["attestation_file_sha256"]) is not None,
             "GDK_RETURN_PREVIEW_ATTESTATION_FILE_SHA_INVALID")
+    require(isinstance(build.get("workflow_head_sha"), str)
+            and re.fullmatch(r"[a-f0-9]{40}", build["workflow_head_sha"]) is not None,
+            "GDK_RETURN_PREVIEW_BUILD_WORKFLOW_HEAD_INVALID")
+    require(type(build.get("run_id")) is int and build["run_id"] > 0
+            and type(build.get("exe_artifact_id")) is int and build["exe_artifact_id"] > 0
+            and isinstance(build.get("run_url"), str)
+            and build["run_url"] == (
+                f"https://github.com/shihuiarenjinba-png/AI-Game-Factory/actions/runs/{build['run_id']}"
+            ),
+            "GDK_RETURN_PREVIEW_BUILD_RUN_BINDING_INVALID")
+    require(isinstance(build.get("exe_artifact_zip_sha256"), str)
+            and re.fullmatch(r"[a-f0-9]{64}", build["exe_artifact_zip_sha256"]) is not None,
+            "GDK_RETURN_PREVIEW_EXE_ARTIFACT_DIGEST_INVALID")
     build_artifact = build.get("attestation_artifact")
     require(isinstance(build_artifact, dict)
+            and build_artifact.get("name") == "signal-sprint-completed-build-attestation"
             and type(build_artifact.get("artifact_id")) is int
             and build_artifact["artifact_id"] > 0
             and isinstance(build_artifact.get("zip_sha256"), str)
