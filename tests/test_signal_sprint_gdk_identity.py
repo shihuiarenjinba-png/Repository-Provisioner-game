@@ -8,6 +8,7 @@ import unittest
 from package_identity_provisioner import (
     GitHubReturnClient, Job, OfficialIdentityProvider, ProductConfig,
     build_gdk_identity_return_preview_receipt,
+    canonical_hash,
     signal_sprint_gdk_lineage,
     validate_gdk_identity_return_preview_receipt,
 )
@@ -469,6 +470,17 @@ class GdkIdentityContractTests(unittest.TestCase):
         receipt["return_target"]["path"] = "products/signal-sprint/store/other.json"
         with self.assertRaisesRegex(Exception, "RECEIPT_SHA_MISMATCH"):
             validate_gdk_identity_return_preview_receipt(receipt)
+
+
+    def test_preview_receipt_validator_recomputes_identity_fingerprint(self):
+        receipt = build_gdk_identity_return_preview_receipt(*preview_fixture())
+        receipt["identity_reference"]["identifiers"]["store_id"] = "9N21MJM7S57R"
+        receipt["receipt_sha256"] = canonical_hash({
+            key: value for key, value in receipt.items() if key != "receipt_sha256"
+        })
+        with self.assertRaisesRegex(Exception, "IDENTITY_FINGERPRINT_MISMATCH"):
+            validate_gdk_identity_return_preview_receipt(receipt)
+
 
     def test_committed_current_lineage_preview_evidence_validates(self):
         path = ROOT / "evidence" / "signal-sprint-gdk-identity-return-preview.json"
