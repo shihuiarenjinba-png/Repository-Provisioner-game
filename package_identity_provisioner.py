@@ -50,6 +50,22 @@ PINNED_SIGNAL_SPRINT_JOB = {
     "source_branch": "codex/game-signal-sprint-undo-20261027",
     "source_sha": "c058cbf7fe38e02d929c67d047d717ff74bd522e",
 }
+# Current immutable Factory source is a separate request lineage. Keep the
+# historical c058 request intact; never infer a new request from a matching
+# product slug or allow cross-lineage request/Identity pairs.
+PINNED_SIGNAL_SPRINT_CURRENT_JOB = {
+    "request_id": "game-signal-sprint-1a349faa41663c417c40710140a4d50c79b62b78",
+    "product_type": "GAME",
+    "slug": "signal-sprint",
+    "source_factory": "AI-Game-Factory",
+    "source_repository": "shihuiarenjinba-png/AI-Game-Factory",
+    "source_branch": "codex/signal-sprint-frozen-source-ref-20261124",
+    "source_sha": "1a349faa41663c417c40710140a4d50c79b62b78",
+}
+PINNED_SIGNAL_SPRINT_GDK_LINEAGES = (
+    ("LEGACY_C058", PINNED_SIGNAL_SPRINT_JOB),
+    ("CURRENT_1A349", PINNED_SIGNAL_SPRINT_CURRENT_JOB),
+)
 PINNED_SIGNAL_SPRINT_GDK_IDENTITY = {
     "store_id": "9N21MJM7S57P",
     "name": "OkinawaDesktopTools.SignalSprint",
@@ -61,6 +77,9 @@ PINNED_SIGNAL_SPRINT_GDK_IDENTITY = {
     "xbox_scid": "00000000-0000-0000-0000-000068721417",
     "msa_app_id": "39852fc3-fa46-4bda-88aa-b35385488ced",
 }
+PINNED_SIGNAL_SPRINT_GDK_IDENTITY_PROVIDED_AT = "2026-10-28T10:49:00+09:00"
+GDK_IDENTITY_RETURN_PREVIEW_SCHEMA = "signal-sprint-gdk-identity-return-preview-v1"
+
 ALLOWED_ACTIONS = {"BUILD_WINDOWS", "INSPECT_PACKAGE", "LOOKUP_OFFICIAL_IDENTITY", "PROPOSE_GITHUB_RETURN"}
 FINAL_STATUSES = {"COMPLETED", "DRY_RUN", "CONFLICT"}
 TRANSIENT_HTTP = {429, 500, 502, 503, 504}
@@ -217,6 +236,18 @@ class Job:
 
     def fingerprint(self) -> str:
         return canonical_hash(asdict(self))
+
+
+def signal_sprint_gdk_lineage(job: Job) -> str | None:
+    """Return the exact allowlisted Signal Sprint request/source lineage.
+
+    Product slug and self-consistent user evidence are insufficient. Every
+    request, repository, branch and source field must match one reviewed tuple.
+    """
+    for lineage_name, expected in PINNED_SIGNAL_SPRINT_GDK_LINEAGES:
+        if all(getattr(job, key, None) == value for key, value in expected.items()):
+            return lineage_name
+    return None
 
 
 class RequestLock:
@@ -624,8 +655,11 @@ class OfficialIdentityProvider:
         }
         if set(raw) == gdk_required:
             self._validate_common(raw, job)
-            if any(getattr(job, key) != value for key, value in PINNED_SIGNAL_SPRINT_JOB.items()):
-                raise ConflictError("GDK Identity request is not the immutable Signal Sprint product")
+            lineage = signal_sprint_gdk_lineage(job)
+            if lineage is None:
+                raise ConflictError(
+                    "GDK Identity request is not an allowlisted Signal Sprint source/request lineage"
+                )
             if (raw["identity_source"] != GDK_USER_IDENTITY_SOURCE
                     or raw["packaging_family"] != "GDK"):
                 raise HoldError("Invalid GDK identity source or packaging family")
@@ -693,6 +727,483 @@ def official_identity_response(official: dict[str, Any]) -> dict[str, Any]:
 
 
 
+
+def validate_gdk_identity_return_preview_receipt(receipt: dict[str, Any]) -> bool:
+    """Validate a check-only, source-bound GDK Identity return receipt for handoff.
+
+    This validator never contacts GitHub and never authorizes CAS. The receipt
+    is deliberately narrower than an approved-identity return or package gate.
+    """
+    def require(condition: bool, code: str) -> None:
+        if not condition:
+            raise ConflictError(code)
+
+    require(isinstance(receipt, dict), "GDK_RETURN_PREVIEW_RECEIPT_NOT_OBJECT")
+    claimed = receipt.get("receipt_sha256")
+    require(isinstance(claimed, str) and re.fullmatch(r"[a-f0-9]{64}", claimed) is not None,
+            "GDK_RETURN_PREVIEW_RECEIPT_SHA_INVALID")
+    payload = dict(receipt)
+    payload.pop("receipt_sha256", None)
+    require(canonical_hash(payload) == claimed, "GDK_RETURN_PREVIEW_RECEIPT_SHA_MISMATCH")
+    require(receipt.get("schema") == GDK_IDENTITY_RETURN_PREVIEW_SCHEMA,
+            "GDK_RETURN_PREVIEW_SCHEMA_MISMATCH")
+    require(receipt.get("status") == "CHECK_ONLY_SOURCE_BOUND_IDENTITY_RETURN_PREVIEW",
+            "GDK_RETURN_PREVIEW_STATUS_INVALID")
+    require(receipt.get("scope") == "IDENTITY_ONLY", "GDK_RETURN_PREVIEW_SCOPE_INVALID")
+    require(receipt.get("request_id") ==
+            "game-signal-sprint-1a349faa41663c417c40710140a4d50c79b62b78",
+            "GDK_RETURN_PREVIEW_REQUEST_MISMATCH")
+    require(receipt.get("product_type") == "GAME", "GDK_RETURN_PREVIEW_PRODUCT_TYPE_MISMATCH")
+    require(receipt.get("source_factory") == "AI-Game-Factory",
+            "GDK_RETURN_PREVIEW_SOURCE_FACTORY_MISMATCH")
+    require(receipt.get("source_repository") == "shihuiarenjinba-png/AI-Game-Factory",
+            "GDK_RETURN_PREVIEW_REPOSITORY_MISMATCH")
+    require(receipt.get("source_branch") == "codex/signal-sprint-frozen-source-ref-20261124",
+            "GDK_RETURN_PREVIEW_BRANCH_MISMATCH")
+    require(receipt.get("source_sha") == "1a349faa41663c417c40710140a4d50c79b62b78",
+            "GDK_RETURN_PREVIEW_SOURCE_SHA_MISMATCH")
+    require(receipt.get("lineage") == "CURRENT_1A349", "GDK_RETURN_PREVIEW_LINEAGE_MISMATCH")
+    require(receipt.get("registration_family") == "GDK",
+            "GDK_RETURN_PREVIEW_REGISTRATION_FAMILY_MISMATCH")
+
+    identity = receipt.get("identity_reference")
+    require(isinstance(identity, dict), "GDK_RETURN_PREVIEW_IDENTITY_REFERENCE_MISSING")
+    require(identity.get("type") == GDK_USER_IDENTITY_SOURCE,
+            "GDK_RETURN_PREVIEW_IDENTITY_SOURCE_MISMATCH")
+    require(identity.get("provided_at") == PINNED_SIGNAL_SPRINT_GDK_IDENTITY_PROVIDED_AT,
+            "GDK_RETURN_PREVIEW_IDENTITY_TIMESTAMP_MISMATCH")
+    fingerprint = identity.get("fingerprint_sha256")
+    require(isinstance(fingerprint, str) and re.fullmatch(r"[a-f0-9]{64}", fingerprint) is not None,
+            "GDK_RETURN_PREVIEW_IDENTITY_FINGERPRINT_INVALID")
+    require(identity.get("identifiers") == PINNED_SIGNAL_SPRINT_GDK_IDENTITY,
+            "GDK_RETURN_PREVIEW_IDENTITY_IDENTIFIERS_MISMATCH")
+    identity_payload = {
+        "request_id": receipt["request_id"],
+        "product_type": receipt["product_type"],
+        "slug": "signal-sprint",
+        "source_sha": receipt["source_sha"],
+        "identity_source": identity["type"],
+        "provided_at": identity["provided_at"],
+        **identity["identifiers"],
+        "packaging_family": receipt["registration_family"],
+    }
+    require(canonical_hash(identity_payload) == fingerprint,
+            "GDK_RETURN_PREVIEW_IDENTITY_FINGERPRINT_MISMATCH")
+
+    target = receipt.get("return_target")
+    require(isinstance(target, dict), "GDK_RETURN_PREVIEW_TARGET_MISSING")
+    require(target.get("repository") == "shihuiarenjinba-png/AI-Game-Factory",
+            "GDK_RETURN_PREVIEW_TARGET_REPOSITORY_MISMATCH")
+    require(target.get("branch") == "codex/signal-sprint-frozen-source-ref-20261124",
+            "GDK_RETURN_PREVIEW_TARGET_BRANCH_MISMATCH")
+    require(target.get("path") == "products/signal-sprint/store/approved-identity.json",
+            "GDK_RETURN_PREVIEW_TARGET_PATH_MISMATCH")
+    require(target.get("operation") == "ADD_ONLY_ATOMIC_GITHUB_RETURN",
+            "GDK_RETURN_PREVIEW_TARGET_OPERATION_MISMATCH")
+    require(target.get("expected_head") == "1a349faa41663c417c40710140a4d50c79b62b78",
+            "GDK_RETURN_PREVIEW_TARGET_HEAD_MISMATCH")
+
+    request = receipt.get("request_provenance")
+    require(isinstance(request, dict), "GDK_RETURN_PREVIEW_REQUEST_EVIDENCE_MISSING")
+    require(request.get("request_generated") is True and request.get("request_submitted") is False,
+            "GDK_RETURN_PREVIEW_REQUEST_MUST_REMAIN_UNSUBMITTED")
+    require(request.get("dry_run_only") is True, "GDK_RETURN_PREVIEW_REQUEST_NOT_DRY_RUN")
+    require(request.get("request_id") == receipt["request_id"],
+            "GDK_RETURN_PREVIEW_REQUEST_EVIDENCE_ID_MISMATCH")
+    require(request.get("source_sha") == receipt["source_sha"],
+            "GDK_RETURN_PREVIEW_REQUEST_EVIDENCE_SOURCE_MISMATCH")
+    require(isinstance(request.get("request_payload_sha256"), str)
+            and re.fullmatch(r"[a-f0-9]{64}", request["request_payload_sha256"]) is not None,
+            "GDK_RETURN_PREVIEW_REQUEST_PAYLOAD_SHA_INVALID")
+    require(isinstance(request.get("readiness_file_sha256"), str)
+            and re.fullmatch(r"[a-f0-9]{64}", request["readiness_file_sha256"]) is not None,
+            "GDK_RETURN_PREVIEW_READINESS_FILE_SHA_INVALID")
+    readiness_artifact = request.get("readiness_artifact")
+    require(isinstance(readiness_artifact, dict)
+            and readiness_artifact.get("name") == "signal-sprint-gdk-package-readiness"
+            and type(readiness_artifact.get("artifact_id")) is int
+            and readiness_artifact["artifact_id"] > 0
+            and isinstance(readiness_artifact.get("zip_sha256"), str)
+            and re.fullmatch(r"[a-f0-9]{64}", readiness_artifact["zip_sha256"]) is not None
+            and type(readiness_artifact.get("zip_size_bytes")) is int
+            and readiness_artifact["zip_size_bytes"] > 0,
+            "GDK_RETURN_PREVIEW_READINESS_ARTIFACT_INVALID")
+
+    build = receipt.get("build_provenance")
+    require(isinstance(build, dict), "GDK_RETURN_PREVIEW_BUILD_EVIDENCE_MISSING")
+    require(build.get("status") == "PASS_INDEPENDENT_BUILD_ONLY",
+            "GDK_RETURN_PREVIEW_BUILD_STATUS_INVALID")
+    require(build.get("source_sha") == receipt["source_sha"],
+            "GDK_RETURN_PREVIEW_BUILD_SOURCE_MISMATCH")
+    require(build.get("pr30_source_sha") == "a377043d3c9ab0c71d9a100cdb841dd7000313b9",
+            "GDK_RETURN_PREVIEW_PR30_SOURCE_MISMATCH")
+    require(build.get("run_status") == "completed" and build.get("run_conclusion") == "success",
+            "GDK_RETURN_PREVIEW_BUILD_RUN_NOT_COMPLETED_SUCCESS")
+    require(build.get("completed_run_required") is True
+            and build.get("independent_build_verified") is True
+            and build.get("build_provenance_verified") is True,
+            "GDK_RETURN_PREVIEW_BUILD_NOT_INDEPENDENTLY_VERIFIED")
+    require(build.get("physical_gui_verified") is False
+            and build.get("gdk_package_verified") is False
+            and build.get("msix_status") == "NOT_BUILT"
+            and build.get("product_acceptance") is False,
+            "GDK_RETURN_PREVIEW_BUILD_FALSE_ACCEPTANCE_CLAIM")
+    require(isinstance(build.get("exe_sha256"), str)
+            and re.fullmatch(r"[a-f0-9]{64}", build["exe_sha256"]) is not None
+            and type(build.get("exe_size_bytes")) is int and build["exe_size_bytes"] > 0,
+            "GDK_RETURN_PREVIEW_EXE_PROVENANCE_INVALID")
+    require(type(build.get("run_id")) is int and build["run_id"] > 0
+            and type(build.get("exe_artifact_id")) is int and build["exe_artifact_id"] > 0
+            and type(build.get("workflow_head_sha")) is str
+            and re.fullmatch(r"[a-f0-9]{40}", build["workflow_head_sha"]) is not None,
+            "GDK_RETURN_PREVIEW_BUILD_BINDINGS_INVALID")
+    require(isinstance(build.get("attestation_file_sha256"), str)
+            and re.fullmatch(r"[a-f0-9]{64}", build["attestation_file_sha256"]) is not None,
+            "GDK_RETURN_PREVIEW_ATTESTATION_FILE_SHA_INVALID")
+    require(isinstance(build.get("workflow_head_sha"), str)
+            and re.fullmatch(r"[a-f0-9]{40}", build["workflow_head_sha"]) is not None,
+            "GDK_RETURN_PREVIEW_BUILD_WORKFLOW_HEAD_INVALID")
+    require(type(build.get("run_id")) is int and build["run_id"] > 0
+            and type(build.get("exe_artifact_id")) is int and build["exe_artifact_id"] > 0
+            and isinstance(build.get("run_url"), str)
+            and build["run_url"] == (
+                f"https://github.com/shihuiarenjinba-png/AI-Game-Factory/actions/runs/{build['run_id']}"
+            ),
+            "GDK_RETURN_PREVIEW_BUILD_RUN_BINDING_INVALID")
+    require(isinstance(build.get("exe_artifact_zip_sha256"), str)
+            and re.fullmatch(r"[a-f0-9]{64}", build["exe_artifact_zip_sha256"]) is not None,
+            "GDK_RETURN_PREVIEW_EXE_ARTIFACT_DIGEST_INVALID")
+    build_artifact = build.get("attestation_artifact")
+    require(isinstance(build_artifact, dict)
+            and build_artifact.get("name") == "signal-sprint-completed-build-attestation"
+            and type(build_artifact.get("artifact_id")) is int
+            and build_artifact["artifact_id"] > 0
+            and isinstance(build_artifact.get("zip_sha256"), str)
+            and re.fullmatch(r"[a-f0-9]{64}", build_artifact["zip_sha256"]) is not None
+            and type(build_artifact.get("zip_size_bytes")) is int
+            and build_artifact["zip_size_bytes"] > 0,
+            "GDK_RETURN_PREVIEW_ATTESTATION_ARTIFACT_INVALID")
+
+    authorization = receipt.get("authorization")
+    require(isinstance(authorization, dict), "GDK_RETURN_PREVIEW_AUTHORIZATION_MISSING")
+    require(authorization.get("dry_run") is True
+            and authorization.get("apply_requested") is False
+            and authorization.get("request_submitted") is False
+            and authorization.get("cas_status") == "NOT_APPLIED"
+            and authorization.get("cas_write_performed") is False
+            and authorization.get("github_api_calls") == 0
+            and authorization.get("github_write_calls") == 0
+            and authorization.get("central_ledger_modified") is False,
+            "GDK_RETURN_PREVIEW_MUST_REMAIN_READ_ONLY")
+    gates = receipt.get("gates")
+    require(isinstance(gates, dict)
+            and gates.get("physical_gui_verified") is False
+            and gates.get("gdk_package_verified") is False
+            and gates.get("msix_status") == "NOT_BUILT"
+            and gates.get("product_acceptance") is False
+            and gates.get("ordinary_msix_allowed") is False,
+            "GDK_RETURN_PREVIEW_GATE_SEPARATION_INVALID")
+    require(receipt.get("next_stage") == "EXPLICIT_CAS_REVIEW_REQUIRED",
+            "GDK_RETURN_PREVIEW_NEXT_STAGE_INVALID")
+    require("version" not in receipt, "GDK_RETURN_PREVIEW_MUST_NOT_INFER_VERSION")
+    return True
+
+
+def build_gdk_identity_return_preview_receipt(
+    job: Job,
+    config: ProductConfig,
+    official: dict[str, Any],
+    build_attestation: dict[str, Any],
+    readiness: dict[str, Any],
+    build_attestation_artifact: dict[str, Any],
+    readiness_artifact: dict[str, Any],
+    build_attestation_file_sha256: str,
+    readiness_file_sha256: str,
+) -> dict[str, Any]:
+    """Create a no-write GDK Identity-only preview bound to current frozen evidence."""
+    def require(condition: bool, code: str) -> None:
+        if not condition:
+            raise ConflictError(code)
+
+    current_source = "1a349faa41663c417c40710140a4d50c79b62b78"
+    pr30_source = "a377043d3c9ab0c71d9a100cdb841dd7000313b9"
+    current_request = "game-signal-sprint-" + current_source
+    current_branch = "codex/signal-sprint-frozen-source-ref-20261124"
+    if not job.dry_run:
+        raise HoldError("GDK_RETURN_PREVIEW_REQUIRES_DRY_RUN_TRUE")
+    if job.product_type != "GAME" or config.product_type != "GAME":
+        raise HoldError("GDK_RETURN_PREVIEW_GAME_ONLY")
+    if signal_sprint_gdk_lineage(job) != "CURRENT_1A349":
+        raise ConflictError("GDK_RETURN_PREVIEW_REQUIRES_CURRENT_1A349_LINEAGE")
+    if (job.request_id != current_request or job.source_sha != current_source
+            or job.source_branch != current_branch
+            or job.source_repository != config.source_repository
+            or job.source_factory != config.source_factory):
+        raise ConflictError("GDK_RETURN_PREVIEW_JOB_BINDING_MISMATCH")
+
+    required_identity = {
+        "request_id", "product_type", "slug", "source_sha", "identity_source",
+        "provided_at", "store_id", "name", "publisher", "publisher_display_name",
+        "package_family_name", "package_sid", "packaging_family",
+        "xbox_title_id", "xbox_scid", "msa_app_id",
+    }
+    if not isinstance(official, dict) or set(official) != required_identity:
+        raise HoldError("GDK_RETURN_PREVIEW_IDENTITY_SCHEMA_INVALID")
+    if (official.get("request_id") != job.request_id
+            or official.get("product_type") != "GAME"
+            or official.get("slug") != "signal-sprint"
+            or official.get("source_sha") != current_source):
+        raise ConflictError("GDK_RETURN_PREVIEW_IDENTITY_LINEAGE_MISMATCH")
+    if (official.get("identity_source") != GDK_USER_IDENTITY_SOURCE
+            or official.get("packaging_family") != "GDK"
+            or official.get("provided_at") != PINNED_SIGNAL_SPRINT_GDK_IDENTITY_PROVIDED_AT):
+        raise ConflictError("GDK_RETURN_PREVIEW_IDENTITY_REFERENCE_MISMATCH")
+    if any(type(official.get(key)) is not str or official[key] != value
+           for key, value in PINNED_SIGNAL_SPRINT_GDK_IDENTITY.items()):
+        raise ConflictError("GDK_RETURN_PREVIEW_IDENTITY_IDENTIFIERS_MISMATCH")
+
+    def artifact_snapshot(value: dict[str, Any], expected_name: str) -> dict[str, Any]:
+        if not isinstance(value, dict) or value.get("name") != expected_name:
+            raise HoldError("GDK_RETURN_PREVIEW_ARTIFACT_NAME_MISMATCH")
+        artifact_id = value.get("artifact_id")
+        size = value.get("size_in_bytes")
+        digest = value.get("digest")
+        downloaded_sha = value.get("downloaded_zip_sha256")
+        downloaded_size = value.get("downloaded_zip_size_bytes")
+        if (type(artifact_id) is not int or artifact_id <= 0
+                or type(size) is not int or size <= 0
+                or type(downloaded_size) is not int or downloaded_size != size
+                or not isinstance(digest, str)
+                or re.fullmatch(r"sha256:[a-f0-9]{64}", digest) is None
+                or not isinstance(downloaded_sha, str)
+                or re.fullmatch(r"[a-f0-9]{64}", downloaded_sha) is None
+                or digest[7:] != downloaded_sha):
+            raise ConflictError("GDK_RETURN_PREVIEW_ARTIFACT_BYTES_NOT_MATCHED")
+        return {
+            "artifact_id": artifact_id,
+            "name": expected_name,
+            "zip_sha256": downloaded_sha,
+            "zip_size_bytes": size,
+        }
+
+    build_artifact = artifact_snapshot(
+        build_attestation_artifact, "signal-sprint-completed-build-attestation"
+    )
+    readiness_artifact_record = artifact_snapshot(
+        readiness_artifact, "signal-sprint-gdk-package-readiness"
+    )
+    for label, value in (
+        ("build attestation", build_attestation_file_sha256),
+        ("readiness", readiness_file_sha256),
+    ):
+        if not isinstance(value, str) or re.fullmatch(r"[a-f0-9]{64}", value) is None:
+            raise HoldError("GDK_RETURN_PREVIEW_" + label.upper().replace(" ", "_") + "_FILE_SHA_INVALID")
+
+    if not isinstance(build_attestation, dict):
+        raise HoldError("GDK_RETURN_PREVIEW_BUILD_ATTESTATION_INVALID")
+    required_build = {
+        "status": "PASS_INDEPENDENT_BUILD_ONLY",
+        "product_source": current_source,
+        "pr30_source_commit": pr30_source,
+        "pr30_ancestry_verified": True,
+        "build_job_name": "windows-frozen-source-exe",
+        "run_status_at_verification": "completed",
+        "run_conclusion": "success",
+        "completed_run_required": True,
+        "build_provenance_verified": True,
+        "independent_build_verified": True,
+        "physical_gui_verified": False,
+        "artifact_kind": "EXE_QA_UNSIGNED",
+        "msix_status": "NOT_BUILT",
+        "gdk_package_verified": False,
+        "product_acceptance": False,
+        "build_proof_artifact_verified": True,
+    }
+    if any(build_attestation.get(key) != value for key, value in required_build.items()):
+        raise ConflictError("GDK_RETURN_PREVIEW_BUILD_ATTESTATION_NOT_ACCEPTABLE")
+    run_id = build_attestation.get("run_id")
+    exe_artifact_id = build_attestation.get("artifact_id")
+    workflow_head = build_attestation.get("workflow_head_sha")
+    exe_sha = build_attestation.get("exe_sha256")
+    exe_size = build_attestation.get("exe_size_bytes")
+    if (type(run_id) is not int or run_id <= 0
+            or type(exe_artifact_id) is not int or exe_artifact_id <= 0
+            or not isinstance(workflow_head, str) or re.fullmatch(r"[a-f0-9]{40}", workflow_head) is None
+            or not isinstance(exe_sha, str) or re.fullmatch(r"[a-f0-9]{64}", exe_sha) is None
+            or type(exe_size) is not int or exe_size <= 0
+            or build_attestation.get("artifact_exe_size_bytes") != exe_size
+            or build_attestation.get("artifact_zip_size_bytes") <= 0
+            or re.fullmatch(r"[a-f0-9]{64}", str(build_attestation.get("artifact_zip_sha256") or "")) is None):
+        raise ConflictError("GDK_RETURN_PREVIEW_BUILD_BINDINGS_INVALID")
+    expected_run_url = f"https://github.com/{job.source_repository}/actions/runs/{run_id}"
+    if build_attestation.get("build_run_url") != expected_run_url:
+        raise ConflictError("GDK_RETURN_PREVIEW_BUILD_RUN_URL_MISMATCH")
+    proof_digest = build_attestation.get("build_proof_artifact_digest")
+    proof_zip_sha = build_attestation.get("build_proof_artifact_zip_sha256")
+    if (type(build_attestation.get("build_proof_artifact_id")) is not int
+            or build_attestation["build_proof_artifact_id"] <= 0
+            or type(build_attestation.get("build_proof_artifact_run_id")) is not int
+            or build_attestation["build_proof_artifact_run_id"] != run_id
+            or build_attestation.get("build_proof_artifact_workflow_head_sha") != workflow_head
+            or not isinstance(proof_digest, str)
+            or re.fullmatch(r"sha256:[a-f0-9]{64}", proof_digest) is None
+            or proof_zip_sha != proof_digest[7:]
+            or type(build_attestation.get("build_proof_artifact_zip_size_bytes")) is not int
+            or build_attestation["build_proof_artifact_zip_size_bytes"] <= 0):
+        raise ConflictError("GDK_RETURN_PREVIEW_BUILD_PROOF_ARTIFACT_BINDING_INVALID")
+
+    if not isinstance(readiness, dict) or readiness.get("schema") != "signal-sprint-gdk-current-source-readiness-v1":
+        raise HoldError("GDK_RETURN_PREVIEW_READINESS_SCHEMA_INVALID")
+    if (readiness.get("read_only") is not True
+            or readiness.get("workflow_head_sha") != workflow_head
+            or readiness.get("source_checkout", {}).get("head_sha") != current_source
+            or readiness.get("source_checkout", {}).get("exact_frozen_source_verified") is not True):
+        raise ConflictError("GDK_RETURN_PREVIEW_READINESS_SOURCE_BINDING_INVALID")
+    request = readiness.get("request")
+    payload = request.get("request_payload") if isinstance(request, dict) else None
+    if (not isinstance(request, dict) or not isinstance(payload, dict)
+            or request.get("request_generated") is not True
+            or request.get("request_submitted") is not False
+            or request.get("dry_run_only") is not True
+            or request.get("request_id") != current_request
+            or request.get("source_branch") != current_branch
+            or request.get("status") != "CHECK_ONLY_REQUEST_DERIVED_NOT_SUBMITTED"):
+        raise ConflictError("GDK_RETURN_PREVIEW_REQUEST_NOT_CHECK_ONLY")
+    payload_fields = (
+        "request_id", "product_type", "source_factory", "source_repository",
+        "source_branch", "source_sha", "slug", "target_owner", "dry_run",
+        "requested_actions",
+    )
+    job_values = asdict(job)
+    for field in payload_fields:
+        expected_value = list(job_values[field]) if field == "requested_actions" else job_values[field]
+        if payload.get(field) != expected_value:
+            raise ConflictError("GDK_RETURN_PREVIEW_REQUEST_PAYLOAD_MISMATCH:" + field)
+    if payload.get("dry_run") is not True:
+        raise ConflictError("GDK_RETURN_PREVIEW_REQUEST_PAYLOAD_NOT_DRY_RUN")
+    if (readiness.get("route", {}).get("packaging_family") != "GDK"
+            or readiness.get("route", {}).get("partner_center_selection") != "GDK_GAME"
+            or readiness.get("route", {}).get("ordinary_msix_allowed") is not False):
+        raise ConflictError("GDK_RETURN_PREVIEW_ROUTE_MISMATCH")
+    authorization = readiness.get("authorization", {})
+    if (authorization.get("cas_write_performed") is not False
+            or authorization.get("request_submitted") is not False
+            or authorization.get("central_ledger_modified") is not False
+            or authorization.get("makepkg_executed") is not False
+            or authorization.get("msixvc2_built") is not False
+            or authorization.get("store_submitted") is not False):
+        raise ConflictError("GDK_RETURN_PREVIEW_READINESS_HAS_SIDE_EFFECT")
+    if (readiness.get("source_lineage", {}).get("legacy_identity_reusable") is not False
+            or readiness.get("legacy_identity", {}).get("reusable") is not False
+            or readiness.get("identity", {}).get("legacy_identity_reused") is not False):
+        raise ConflictError("GDK_RETURN_PREVIEW_LEGACY_IDENTITY_REUSE")
+
+    completed = readiness.get("completed_build_attestation", {})
+    for key, expected in (
+        ("status", "PASS_INDEPENDENT_BUILD_ONLY"),
+        ("product_source_sha", current_source),
+        ("pr30_source_sha", pr30_source),
+        ("run_id", run_id),
+        ("artifact_id", exe_artifact_id),
+        ("workflow_head_sha", workflow_head),
+        ("exe_sha256", exe_sha),
+        ("exe_size_bytes", exe_size),
+        ("physical_gui_verified", False),
+        ("gdk_package_verified", False),
+        ("msix_status", "NOT_BUILT"),
+        ("product_acceptance", False),
+    ):
+        if completed.get(key) != expected:
+            raise ConflictError("GDK_RETURN_PREVIEW_READINESS_BUILD_BINDING_MISMATCH:" + key)
+
+    identity_fields = dict(PINNED_SIGNAL_SPRINT_GDK_IDENTITY)
+    identity_reference = {
+        "type": GDK_USER_IDENTITY_SOURCE,
+        "provided_at": PINNED_SIGNAL_SPRINT_GDK_IDENTITY_PROVIDED_AT,
+        "fingerprint_sha256": canonical_hash(official),
+        "identifiers": identity_fields,
+    }
+    receipt = {
+        "schema": GDK_IDENTITY_RETURN_PREVIEW_SCHEMA,
+        "status": "CHECK_ONLY_SOURCE_BOUND_IDENTITY_RETURN_PREVIEW",
+        "scope": "IDENTITY_ONLY",
+        "request_id": job.request_id,
+        "product_type": job.product_type,
+        "source_factory": job.source_factory,
+        "source_repository": job.source_repository,
+        "source_branch": job.source_branch,
+        "source_sha": job.source_sha,
+        "lineage": "CURRENT_1A349",
+        "registration_family": "GDK",
+        "identity_reference": identity_reference,
+        "return_target": {
+            "repository": job.source_repository,
+            "branch": job.source_branch,
+            "path": f"products/{job.slug}/store/approved-identity.json",
+            "operation": "ADD_ONLY_ATOMIC_GITHUB_RETURN",
+            "expected_head": job.source_sha,
+        },
+        "request_provenance": {
+            "readiness_artifact": readiness_artifact_record,
+            "readiness_file_sha256": readiness_file_sha256,
+            "request_payload_sha256": canonical_hash(payload),
+            "request_id": job.request_id,
+            "source_sha": job.source_sha,
+            "request_generated": True,
+            "request_submitted": False,
+            "dry_run_only": True,
+        },
+        "build_provenance": {
+            "status": "PASS_INDEPENDENT_BUILD_ONLY",
+            "source_sha": current_source,
+            "pr30_source_sha": pr30_source,
+            "run_id": run_id,
+            "run_url": expected_run_url,
+            "run_status": "completed",
+            "run_conclusion": "success",
+            "completed_run_required": True,
+            "workflow_head_sha": workflow_head,
+            "exe_artifact_id": exe_artifact_id,
+            "exe_artifact_zip_sha256": build_attestation["artifact_zip_sha256"],
+            "exe_sha256": exe_sha,
+            "exe_size_bytes": exe_size,
+            "attestation_artifact": build_artifact,
+            "attestation_file_sha256": build_attestation_file_sha256,
+            "build_proof_artifact_id": build_attestation["build_proof_artifact_id"],
+            "build_proof_artifact_digest": proof_digest,
+            "build_proof_artifact_zip_size_bytes": build_attestation["build_proof_artifact_zip_size_bytes"],
+            "independent_build_verified": True,
+            "build_provenance_verified": True,
+            "physical_gui_verified": False,
+            "gdk_package_verified": False,
+            "msix_status": "NOT_BUILT",
+            "product_acceptance": False,
+        },
+        "authorization": {
+            "dry_run": True,
+            "apply_requested": False,
+            "request_submitted": False,
+            "cas_status": "NOT_APPLIED",
+            "cas_write_performed": False,
+            "github_api_calls": 0,
+            "github_write_calls": 0,
+            "central_ledger_modified": False,
+        },
+        "gates": {
+            "physical_gui_verified": False,
+            "gdk_package_verified": False,
+            "msix_status": "NOT_BUILT",
+            "product_acceptance": False,
+            "ordinary_msix_allowed": False,
+        },
+        "next_stage": "EXPLICIT_CAS_REVIEW_REQUIRED",
+    }
+    receipt["receipt_sha256"] = canonical_hash(receipt)
+    validate_gdk_identity_return_preview_receipt(receipt)
+    return receipt
+
+
+
 def compare_package_identity(package: dict[str, Any], official: dict[str, Any]) -> None:
     if package.get("kind") not in {"msix", "appx"}:
         raise HoldError("Official Identity cannot be approved from an EXE-only candidate")
@@ -733,6 +1244,22 @@ class GitHubReturnClient:
         proposal = {"status": "NOT_APPLIED", "repository": config.source_repository, "branch": job.source_branch,
                     "path": target_path, "commit_sha": None, "commit_url": None}
         if not apply:
+            if official.get("identity_source") == GDK_USER_IDENTITY_SOURCE:
+                proposal.update(
+                    request_id=job.request_id,
+                    product_type=job.product_type,
+                    source_sha=job.source_sha,
+                    registration_family=official.get("packaging_family"),
+                    identity_source=official.get("identity_source"),
+                    identity_fingerprint_sha256=canonical_hash(official),
+                    dry_run=job.dry_run,
+                    apply_requested=False,
+                    request_submitted=False,
+                    cas_status="NOT_APPLIED",
+                    cas_write_performed=False,
+                    github_api_calls=0,
+                    github_write_calls=0,
+                )
             return proposal
         ref = self.api(base + "git/ref/heads/" + job.source_branch)
         head_sha = ref.get("object", {}).get("sha") if isinstance(ref, dict) else None

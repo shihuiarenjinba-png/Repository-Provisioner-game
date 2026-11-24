@@ -1,0 +1,101 @@
+{
+  "schema": "signal-sprint-gdk-identity-return-preview-v1",
+  "status": "CHECK_ONLY_SOURCE_BOUND_IDENTITY_RETURN_PREVIEW",
+  "scope": "IDENTITY_ONLY",
+  "request_id": "game-signal-sprint-1a349faa41663c417c40710140a4d50c79b62b78",
+  "product_type": "GAME",
+  "source_factory": "AI-Game-Factory",
+  "source_repository": "shihuiarenjinba-png/AI-Game-Factory",
+  "source_branch": "codex/signal-sprint-frozen-source-ref-20261124",
+  "source_sha": "1a349faa41663c417c40710140a4d50c79b62b78",
+  "lineage": "CURRENT_1A349",
+  "registration_family": "GDK",
+  "identity_reference": {
+    "type": "USER_PROVIDED_PARTNER_CENTER",
+    "provided_at": "2026-10-28T10:49:00+09:00",
+    "fingerprint_sha256": "3c5a100f6d9f123e43b18b060e017d2fae3cbabd2d0c9ef55fa9492a8919b3a0",
+    "identifiers": {
+      "store_id": "9N21MJM7S57P",
+      "name": "OkinawaDesktopTools.SignalSprint",
+      "publisher": "CN=46263F21-A700-41DB-8C9B-114C22FB82FC",
+      "publisher_display_name": "Okinawa Desktop Tools",
+      "package_family_name": "OkinawaDesktopTools.SignalSprint_j8yefg9jgfh58",
+      "package_sid": "S-1-15-2-1437967488-3265478925-1925977903-994526844-2895000717-1943620661-378024715",
+      "xbox_title_id": "68721417",
+      "xbox_scid": "00000000-0000-0000-0000-000068721417",
+      "msa_app_id": "39852fc3-fa46-4bda-88aa-b35385488ced"
+    }
+  },
+  "return_target": {
+    "repository": "shihuiarenjinba-png/AI-Game-Factory",
+    "branch": "codex/signal-sprint-frozen-source-ref-20261124",
+    "path": "products/signal-sprint/store/approved-identity.json",
+    "operation": "ADD_ONLY_ATOMIC_GITHUB_RETURN",
+    "expected_head": "1a349faa41663c417c40710140a4d50c79b62b78"
+  },
+  "request_provenance": {
+    "readiness_artifact": {
+      "artifact_id": 14933406309,
+      "name": "signal-sprint-gdk-package-readiness",
+      "zip_sha256": "0bc51f8668d98071da1bc29a27c969b49675b1f8bb64c287eb6cbf6e4ab9ed28",
+      "zip_size_bytes": 3826
+    },
+    "readiness_file_sha256": "0976731b118fe704808d07b4b950e820c583c04a4252b2ca0eea32e62d6e594f",
+    "request_payload_sha256": "4cdeeb786dc1508785eb3d41356b8f2ad15c33355ec2db22a3298d2c60b51a3b",
+    "request_id": "game-signal-sprint-1a349faa41663c417c40710140a4d50c79b62b78",
+    "source_sha": "1a349faa41663c417c40710140a4d50c79b62b78",
+    "request_generated": true,
+    "request_submitted": false,
+    "dry_run_only": true
+  },
+  "build_provenance": {
+    "status": "PASS_INDEPENDENT_BUILD_ONLY",
+    "source_sha": "1a349faa41663c417c40710140a4d50c79b62b78",
+    "pr30_source_sha": "a377043d3c9ab0c71d9a100cdb841dd7000313b9",
+    "run_id": 45418088785,
+    "run_url": "https://github.com/shihuiarenjinba-png/AI-Game-Factory/actions/runs/45418088785",
+    "run_status": "completed",
+    "run_conclusion": "success",
+    "completed_run_required": true,
+    "workflow_head_sha": "90728ddb99303736c97bc95a8c019796601b1a2a",
+    "exe_artifact_id": 14931068646,
+    "exe_artifact_zip_sha256": "3b76321df9f8b1c4a9883d8bade57f0e33a232e18b989cf2e0bba057dafcdba1",
+    "exe_sha256": "4b08ff7caa4a76852bbfe47a69c1ceb70fbf7cecfaf4cfade82e2b882959bd06",
+    "exe_size_bytes": 11453716,
+    "attestation_artifact": {
+      "artifact_id": 14932802178,
+      "name": "signal-sprint-completed-build-attestation",
+      "zip_sha256": "2ef718bc63b024e55505aba8e34f8ae5ccda1cec5e41fa38c4854d6381db4362",
+      "zip_size_bytes": 11208696
+    },
+    "attestation_file_sha256": "0ffc52db3d4d85f7f582075977d098bd4e488bfad82bc82aef39c96f89050968",
+    "build_proof_artifact_id": 14931443640,
+    "build_proof_artifact_digest": "sha256:2d6abf85d56d3d1aa0eb383c1912012c5bd3ba7bb2286d8aa85a542a7fbf72cc",
+    "build_proof_artifact_zip_size_bytes": 2172,
+    "independent_build_verified": true,
+    "build_provenance_verified": true,
+    "physical_gui_verified": false,
+    "gdk_package_verified": false,
+    "msix_status": "NOT_BUILT",
+    "product_acceptance": false
+  },
+  "authorization": {
+    "dry_run": true,
+    "apply_requested": false,
+    "request_submitted": false,
+    "cas_status": "NOT_APPLIED",
+    "cas_write_performed": false,
+    "github_api_calls": 0,
+    "github_write_calls": 0,
+    "central_ledger_modified": false
+  },
+  "gates": {
+    "physical_gui_verified": false,
+    "gdk_package_verified": false,
+    "msix_status": "NOT_BUILT",
+    "product_acceptance": false,
+    "ordinary_msix_allowed": false
+  },
+  "next_stage": "EXPLICIT_CAS_REVIEW_REQUIRED",
+  "receipt_sha256": "ae0e8ecad3368ede9ef6727aa777f2ddf6ce7db88bee1c57c3bc9c04521ba38a"
+}
