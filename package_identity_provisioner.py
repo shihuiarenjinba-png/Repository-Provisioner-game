@@ -50,6 +50,22 @@ PINNED_SIGNAL_SPRINT_JOB = {
     "source_branch": "codex/game-signal-sprint-undo-20261027",
     "source_sha": "c058cbf7fe38e02d929c67d047d717ff74bd522e",
 }
+# Current immutable Factory source is a separate request lineage. Keep the
+# historical c058 request intact; never infer a new request from a matching
+# product slug or allow cross-lineage request/Identity pairs.
+PINNED_SIGNAL_SPRINT_CURRENT_JOB = {
+    "request_id": "game-signal-sprint-1a349faa41663c417c40710140a4d50c79b62b78",
+    "product_type": "GAME",
+    "slug": "signal-sprint",
+    "source_factory": "AI-Game-Factory",
+    "source_repository": "shihuiarenjinba-png/AI-Game-Factory",
+    "source_branch": "codex/signal-sprint-frozen-source-ref-20261124",
+    "source_sha": "1a349faa41663c417c40710140a4d50c79b62b78",
+}
+PINNED_SIGNAL_SPRINT_GDK_LINEAGES = (
+    ("LEGACY_C058", PINNED_SIGNAL_SPRINT_JOB),
+    ("CURRENT_1A349", PINNED_SIGNAL_SPRINT_CURRENT_JOB),
+)
 PINNED_SIGNAL_SPRINT_GDK_IDENTITY = {
     "store_id": "9N21MJM7S57P",
     "name": "OkinawaDesktopTools.SignalSprint",
@@ -217,6 +233,18 @@ class Job:
 
     def fingerprint(self) -> str:
         return canonical_hash(asdict(self))
+
+
+def signal_sprint_gdk_lineage(job: Job) -> str | None:
+    """Return the exact allowlisted Signal Sprint request/source lineage.
+
+    Product slug and self-consistent user evidence are insufficient. Every
+    request, repository, branch and source field must match one reviewed tuple.
+    """
+    for lineage_name, expected in PINNED_SIGNAL_SPRINT_GDK_LINEAGES:
+        if all(getattr(job, key, None) == value for key, value in expected.items()):
+            return lineage_name
+    return None
 
 
 class RequestLock:
@@ -624,8 +652,11 @@ class OfficialIdentityProvider:
         }
         if set(raw) == gdk_required:
             self._validate_common(raw, job)
-            if any(getattr(job, key) != value for key, value in PINNED_SIGNAL_SPRINT_JOB.items()):
-                raise ConflictError("GDK Identity request is not the immutable Signal Sprint product")
+            lineage = signal_sprint_gdk_lineage(job)
+            if lineage is None:
+                raise ConflictError(
+                    "GDK Identity request is not an allowlisted Signal Sprint source/request lineage"
+                )
             if (raw["identity_source"] != GDK_USER_IDENTITY_SOURCE
                     or raw["packaging_family"] != "GDK"):
                 raise HoldError("Invalid GDK identity source or packaging family")
