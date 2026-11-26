@@ -16,3 +16,15 @@
 https://github.com/shihuiarenjinba-png/Windows-all-auto/blob/codex/windows-all-auto-integration-20261026/docs/LOCAL_PROVISIONER_ROLE_CHANGE_2026-10-26.md
 
 既存Draft PR #1の命名提案はそのまま残してよいが **create_allowed=false** のままとし、前のRepo新設指示を本番作業に適用しない。main/release、Factory、Windows-all-autoのコードはローカル担当から無断変更しない。認証情報や秘密鍵はGitに置かない。最終的に `docs/LOCAL_PROVISIONER_HANDOFF.md` に作業前後のHEAD、実コミット、テスト件数、実MSIX/Identity試験、返却先、HOLD/依存関係を記録する。
+
+## Live HEAD 検証（2026-10-27 追加）
+
+`package_job.py` は従来のオフライン DRY_RUN 契約検査に加え、`--verify-live-head` で **FactoryのGitHub APIから現在の作業ブランチHEADを読み取り、入力のsource_shaと一致しない要求を拒否**できる。公式Identity取得やパッケージ生成の前に必ずこの読み取り専用検査を実施すること。
+
+```powershell
+python package_job.py --input game-package-request.json --output game-receipt.json --verify-live-head
+```
+
+公開リポジトリでは匿名での参照も可能だが、レート制限・権限管理のため必要に応じて `GH_TOKEN` または `GITHUB_TOKEN` を環境変数で渡す。トークンを引数、出力JSON、ログに書かない。GitHub通信失敗・権限不足・HEAD不一致は `PACKAGE_INTAKE_HOLD` で停止し、返却ファイルは生成しない。照合成功でも `status=DRY_RUN`、`expected_head_sha` に検証時のSHAを記録するだけで、実ビルド・Store ID取得・GitHub書込みを行ったことにはならない。
+
+**競合注意**：HEAD照合直後に他の開発者がpushする可能性がある。最終的なIdentity返却はWindows-all-autoの `identity_commit` による expectedHeadOid の原子的照合を必ず通す。現時点ではこのCLIからのライブWindowsビルドとPartner Center公式ID取得は未実装／HOLD。
